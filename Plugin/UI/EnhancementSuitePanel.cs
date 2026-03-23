@@ -21,6 +21,7 @@ namespace MTGAEnhancementSuite.UI
         private static TextMeshProUGUI _statusText;
         private static Coroutine _refreshCoroutine;
         private static MonoBehaviour _coroutineRunner;
+        private static string _filterFormat = "all"; // "all" = show everything
 
         public static bool IsOpen => _isOpen;
 
@@ -91,7 +92,7 @@ namespace MTGAEnhancementSuite.UI
             titleRect.anchorMax = new Vector2(0.7f, 1f);
             titleRect.sizeDelta = Vector2.zero;
             var titleText = title.AddComponent<TextMeshProUGUI>();
-            titleText.text = "MTGA-ES Server Browser";
+            titleText.text = "MTGA+ Server Browser";
             titleText.fontSize = 28;
             titleText.fontStyle = FontStyles.Bold;
             titleText.alignment = TextAlignmentOptions.Left;
@@ -120,11 +121,72 @@ namespace MTGAEnhancementSuite.UI
             _statusText.color = new Color(0.6f, 0.6f, 0.7f);
             _statusText.alignment = TextAlignmentOptions.Left;
 
+            // Format filter row
+            var filterRow = CreateChild(content.transform, "FilterRow");
+            var filterRowRect = filterRow.GetComponent<RectTransform>();
+            filterRowRect.anchorMin = new Vector2(0.05f, 0.80f);
+            filterRowRect.anchorMax = new Vector2(0.95f, 0.86f);
+            filterRowRect.sizeDelta = Vector2.zero;
+
+            var filterLabel = CreateChild(filterRow.transform, "FilterLabel");
+            var filterLabelRect = filterLabel.GetComponent<RectTransform>();
+            filterLabelRect.anchorMin = new Vector2(0f, 0f);
+            filterLabelRect.anchorMax = new Vector2(0.15f, 1f);
+            filterLabelRect.sizeDelta = Vector2.zero;
+            var filterLabelText = filterLabel.AddComponent<TextMeshProUGUI>();
+            filterLabelText.text = "Filter:";
+            filterLabelText.fontSize = 16;
+            filterLabelText.color = new Color(0.7f, 0.7f, 0.8f);
+            filterLabelText.alignment = TextAlignmentOptions.Left;
+
+            // "All" button
+            var allBtn = CreateButton(filterRow.transform, "FilterAll", "All",
+                new Vector2(0.16f, 0.05f), new Vector2(0.28f, 0.95f));
+            allBtn.GetComponent<Image>().color = new Color(0.3f, 0.5f, 0.7f, 0.9f); // highlighted by default
+            var allBtnRef = allBtn;
+
+            // Build format filter buttons from loaded formats
+            var formatKeys = ChallengeFormatState.FormatKeys;
+            var formatOptions = ChallengeFormatState.FormatOptions;
+            var filterButtons = new List<GameObject> { allBtn };
+
+            float btnStart = 0.30f;
+            float btnWidth = 0.14f;
+            float btnGap = 0.01f;
+            for (int i = 1; i < formatKeys.Length && i < 6; i++) // skip "none", max 5 format buttons
+            {
+                float left = btnStart + (i - 1) * (btnWidth + btnGap);
+                float right = left + btnWidth;
+                var fmtBtn = CreateButton(filterRow.transform, $"Filter_{formatKeys[i]}", formatOptions[i],
+                    new Vector2(left, 0.05f), new Vector2(right, 0.95f));
+                fmtBtn.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.25f, 0.9f);
+                filterButtons.Add(fmtBtn);
+
+                var capturedKey = formatKeys[i];
+                var capturedButtons = filterButtons;
+                var capturedIdx = filterButtons.Count - 1;
+                fmtBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
+                {
+                    _filterFormat = capturedKey;
+                    HighlightFilterButton(capturedButtons, capturedIdx);
+                    RefreshLobbies();
+                }));
+            }
+
+            // Wire up the All button
+            var allFilterButtons = filterButtons;
+            allBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
+            {
+                _filterFormat = "all";
+                HighlightFilterButton(allFilterButtons, 0);
+                RefreshLobbies();
+            }));
+
             // Lobby list scroll area
             var scrollArea = CreateChild(content.transform, "ScrollArea");
             var scrollRect = scrollArea.GetComponent<RectTransform>();
             scrollRect.anchorMin = new Vector2(0.03f, 0.12f);
-            scrollRect.anchorMax = new Vector2(0.97f, 0.85f);
+            scrollRect.anchorMax = new Vector2(0.97f, 0.79f);
             scrollRect.sizeDelta = Vector2.zero;
 
             var scrollView = scrollArea.AddComponent<ScrollRect>();
@@ -262,6 +324,10 @@ namespace MTGAEnhancementSuite.UI
                     var hostName = lobby["hostDisplayName"]?.ToString() ?? "Unknown";
                     var format = lobby["format"]?.ToString() ?? "none";
 
+                    // Apply format filter
+                    if (_filterFormat != "all" && format != _filterFormat)
+                        continue;
+
                     CreateLobbyRow(challengeId, hostName, format);
                     count++;
                 }
@@ -271,6 +337,18 @@ namespace MTGAEnhancementSuite.UI
                         ? $"{count} public {(count == 1 ? "lobby" : "lobbies")} found"
                         : "No public lobbies found.";
             });
+        }
+
+        private static void HighlightFilterButton(List<GameObject> buttons, int activeIndex)
+        {
+            for (int i = 0; i < buttons.Count; i++)
+            {
+                var img = buttons[i].GetComponent<Image>();
+                if (img != null)
+                    img.color = i == activeIndex
+                        ? new Color(0.3f, 0.5f, 0.7f, 0.9f)   // highlighted
+                        : new Color(0.15f, 0.15f, 0.25f, 0.9f); // default
+            }
         }
 
         private static void ClearLobbyList()

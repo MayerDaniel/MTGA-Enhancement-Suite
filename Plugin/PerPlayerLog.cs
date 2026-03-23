@@ -21,7 +21,7 @@ namespace MTGAEnhancementSuite
             {
                 _playerName = playerName;
                 _writer = new StreamWriter(path, false) { AutoFlush = true };
-                _writer.WriteLine($"=== MTGA-ES Log for {playerName} started at {DateTime.Now} ===");
+                _writer.WriteLine($"=== MTGA+ Log for {playerName} started at {DateTime.Now} ===");
                 Plugin.Log.LogInfo($"Per-player log: {path}");
             }
             catch (Exception ex)

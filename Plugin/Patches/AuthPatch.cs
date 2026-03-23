@@ -101,7 +101,7 @@ namespace MTGAEnhancementSuite.Patches
 
             // All retries exhausted
             _gaveUp = true;
-            Toast.Error("Could not connect to MTGA-ES services after 5 attempts.");
+            Toast.Error("Could not connect to MTGA+ services after 5 attempts.");
             Plugin.Log.LogError("AuthPatch: All auth attempts failed");
         }
 
@@ -131,7 +131,7 @@ namespace MTGAEnhancementSuite.Patches
                 return;
             }
 
-            Toast.Info("Reconnecting to MTGA-ES services...");
+            Toast.Info("Reconnecting to MTGA+ services...");
             _authInProgress = true;
 
             FirebaseClient.Instance.SignInWithMTGAIdentity(_cachedPersonaId, _cachedDisplayName,

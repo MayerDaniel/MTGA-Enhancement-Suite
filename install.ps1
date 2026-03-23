@@ -155,7 +155,7 @@ Write-Host "=== Installation Complete ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "  1. Launch MTGA normally"
-Write-Host "  2. Look for the 'MTGA-ES' tab in the top navigation bar"
+Write-Host "  2. Look for the 'MTGA+' tab in the top navigation bar"
 Write-Host "  3. First launch may take a moment while BepInEx initializes"
 Write-Host ""
 Write-Host "To uninstall, delete:" -ForegroundColor Gray

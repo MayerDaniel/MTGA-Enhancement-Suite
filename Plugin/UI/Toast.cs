@@ -171,7 +171,7 @@ namespace MTGAEnhancementSuite.UI
             prefixRect.anchoredPosition = new Vector2(ToastPadding, -8f);
             prefixRect.sizeDelta = new Vector2(-ToastPadding * 2, 20f);
             var prefixText = prefix.AddComponent<TextMeshProUGUI>();
-            prefixText.text = $"MTGA-ES";
+            prefixText.text = $"MTGA+";
             prefixText.fontSize = 11;
             prefixText.fontStyle = FontStyles.Bold;
             prefixText.color = GetAccentColor(type);

@@ -109,7 +109,7 @@ namespace MTGAEnhancementSuite.Patches
 
                 if (authResult != true)
                 {
-                    Toast.Error("Cannot validate deck without MTGA-ES connection.");
+                    Toast.Error("Cannot validate deck without MTGA+ connection.");
                     yield break;
                 }
             }

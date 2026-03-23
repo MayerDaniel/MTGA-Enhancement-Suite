@@ -48,11 +48,11 @@ When a lobby host changes the format, the joiner's client updates automatically.
 
 ## Usage
 
-1. Launch MTGA — you should see an **MTGA-ES** button in the top navigation bar
+1. Launch MTGA — you should see an **MTGA+** button in the top navigation bar
 2. Create a challenge lobby (Play > Challenge)
 3. Use the **format selector** below the coin flip spinner to choose a format
 4. Click **Copy Link** to get a shareable invite, or **Make Public** to list in the server browser
-5. Click the **MTGA-ES** button to browse public lobbies
+5. Click the **MTGA+** button to browse public lobbies
 
 ## Uninstalling
 

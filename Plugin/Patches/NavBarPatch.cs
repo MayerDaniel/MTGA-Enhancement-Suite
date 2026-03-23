@@ -60,7 +60,7 @@ namespace MTGAEnhancementSuite.Patches
                     btn.OnClick.RemoveAllListeners();
                     btn.OnMouseover.RemoveAllListeners();
                     btn.OnMouseoff.RemoveAllListeners();
-                    btn.SetText("MTGA-ES");
+                    btn.SetText("MTGA+");
                     btn.Interactable = true;
                     btn.OnClick.AddListener(new UnityAction(() =>
                     {
