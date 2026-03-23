@@ -8,10 +8,10 @@ A [BepInEx 5](https://github.com/BepInEx/BepInEx) mod for **Magic: The Gathering
 
 ### One-Line Install
 
-Open **PowerShell** and run:
+Open **PowerShell**, **CMD**, or **Windows Terminal** and run:
 
-```powershell
-irm https://raw.githubusercontent.com/MayerDaniel/MTGA-Enhancement-Suite/main/install.ps1 | iex
+```
+powershell -c "irm https://raw.githubusercontent.com/MayerDaniel/MTGA-Enhancement-Suite/main/install.ps1 | iex"
 ```
 
 This will:
