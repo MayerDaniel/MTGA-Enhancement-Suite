@@ -1,5 +1,10 @@
 # MTGA Enhancement Suite
 
+<img width="512" height="512" alt="a_plus" src="https://github.com/user-attachments/assets/39dbf120-a7ff-4bff-aa3f-6cf236bca393" />
+
+
+[Discord](https://discord.gg/67NhSegmvs)
+
 A [BepInEx 5](https://github.com/BepInEx/BepInEx) mod for **Magic: The Gathering Arena** (Windows) that adds community features Wizards of the Coast hasn't built into the game.
 
 > **Beta** — This mod is in active development. Expect rough edges.
