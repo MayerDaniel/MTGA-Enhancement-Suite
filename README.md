@@ -1,6 +1,6 @@
 # MTGA Enhancement Suite
 
-<img width="512" height="512" alt="a_plus" src="https://github.com/user-attachments/assets/39dbf120-a7ff-4bff-aa3f-6cf236bca393" />
+<img width="256" height="256" alt="a_plus" src="https://github.com/user-attachments/assets/39dbf120-a7ff-4bff-aa3f-6cf236bca393" />
 
 
 [Discord](https://discord.gg/67NhSegmvs)
