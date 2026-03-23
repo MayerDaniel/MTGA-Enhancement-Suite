@@ -124,6 +124,30 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
           legalCards[encodeFirebaseKey(face.trim())] = true;
         }
       }
+
+      // Store printed_name too (paper equivalent for IP crossover cards like om1 Marvel set)
+      // MTGA may use either the IP name or the paper name depending on user settings
+      if (card.printed_name) {
+        const printedName = card.printed_name.toLowerCase();
+        legalCards[encodeFirebaseKey(printedName)] = true;
+        if (printedName.includes(" // ")) {
+          for (const face of printedName.split(" // ")) {
+            legalCards[encodeFirebaseKey(face.trim())] = true;
+          }
+        }
+      }
+
+      // Also check card_faces for DFCs with separate printed_names
+      if (card.card_faces) {
+        for (const face of card.card_faces) {
+          if (face.name) {
+            legalCards[encodeFirebaseKey(face.name.toLowerCase())] = true;
+          }
+          if (face.printed_name) {
+            legalCards[encodeFirebaseKey(face.printed_name.toLowerCase())] = true;
+          }
+        }
+      }
     }
 
     totalFetched += data.data.length;
