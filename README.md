@@ -4,20 +4,6 @@ A [BepInEx 5](https://github.com/BepInEx/BepInEx) mod for **Magic: The Gathering
 
 > **Beta** — This mod is in active development. Expect rough edges.
 
-## Features
-
-### Custom Format Lobbies
-Create challenge lobbies with format rules (currently **Pauper**). When a player selects a deck, it is validated against the format's legal card list — illegal decks are rejected with a message showing which cards aren't allowed. Format rules are synced between host and joiner in real-time via Firebase.
-
-### Lobby Invite Links
-Share a clickable `https://` link to your lobby. The recipient's browser opens a landing page that launches MTGA and joins the lobby automatically — no friend request needed. If MTGA is already running, the link is forwarded to the existing instance.
-
-### Public Lobby Browser
-Mark your lobby as public and it appears in a server browser visible to all Enhancement Suite users. Browse open lobbies, see the host name and format, and join with one click.
-
-### Format Sync Across Matches
-When a lobby host changes the format, the joiner's client updates automatically. Format settings persist across rematches — play multiple games in the same lobby without re-configuring.
-
 ## Installation (Windows)
 
 ### One-Line Install
@@ -40,6 +26,20 @@ This will:
 2. Download `MTGAEnhancementSuite.dll` and `config.json` from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest)
 3. Place both files in `<MTGA>\BepInEx\plugins\MTGAEnhancementSuite\`
 4. Launch MTGA normally
+
+## Features
+
+### Custom Format Lobbies
+Create challenge lobbies with format rules (currently **Pauper** and **Planar Standard** ). When a player selects a deck, it is validated against the format's legal card list — illegal decks are rejected with a message showing which cards aren't allowed. Format rules are synced between host and joiner in real-time via Firebase, and backed by scryfall.
+
+### Lobby Invite Links
+Share a clickable `https://` link to your lobby. The recipient's browser opens a landing page that launches MTGA and joins the lobby automatically — no friend request needed. If MTGA is already running, the link is forwarded to the existing instance.
+
+### Public Lobby Browser
+Mark your lobby as public and it appears in a server browser visible to all Enhancement Suite users. Browse open lobbies, see the host name and format, and join with one click.
+
+### Format Sync Across Matches
+When a lobby host changes the format, the joiner's client updates automatically. Format settings persist across rematches — play multiple games in the same lobby without re-configuring.
 
 ## Usage
 
