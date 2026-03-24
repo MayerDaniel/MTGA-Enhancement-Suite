@@ -141,13 +141,81 @@ namespace MTGAEnhancementSuite
             {
                 Plugin.Log.LogInfo($"Processing pending join: {ChallengeFormatState.PendingJoinChallengeId}");
 
-                // Wait a bit more for the game UI to be ready
-                yield return new WaitForSeconds(3f);
+                // Wait for the main menu to fully load:
+                // 1. NavBarController must exist (main menu is rendered)
+                // 2. IChallengeCommunicationWrapper must be in Pantry (challenge system ready)
+                Plugin.Log.LogInfo("Waiting for main menu and challenge system...");
+
+                // Wait for NavBarController
+                float timeout = 120f; // 2 minute max wait
+                while (timeout > 0f)
+                {
+                    var navBar = UnityEngine.Object.FindObjectOfType<NavBarController>();
+                    if (navBar != null)
+                    {
+                        Plugin.Log.LogInfo("NavBarController found — main menu is loaded");
+                        break;
+                    }
+                    yield return new WaitForSeconds(2f);
+                    timeout -= 2f;
+                }
+
+                if (timeout <= 0f)
+                {
+                    Plugin.Log.LogWarning("Timed out waiting for main menu");
+                    ChallengeFormatState.ClearPendingJoin();
+                    yield break;
+                }
+
+                // Wait for challenge system to be ready in Pantry
+                var pantryType = AccessTools.TypeByName("Pantry");
+                Type commWrapperType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    foreach (var t in asm.GetTypes())
+                    {
+                        if (t.Name == "IChallengeCommunicationWrapper" && t.IsInterface)
+                        { commWrapperType = t; break; }
+                    }
+                    if (commWrapperType != null) break;
+                }
+
+                if (commWrapperType != null && pantryType != null)
+                {
+                    timeout = 30f;
+                    while (timeout > 0f)
+                    {
+                        try
+                        {
+                            var wrapper = pantryType.GetMethod("Get")
+                                .MakeGenericMethod(commWrapperType)
+                                .Invoke(null, null);
+                            if (wrapper != null)
+                            {
+                                Plugin.Log.LogInfo("IChallengeCommunicationWrapper ready in Pantry");
+                                break;
+                            }
+                        }
+                        catch { }
+                        yield return new WaitForSeconds(2f);
+                        timeout -= 2f;
+                    }
+                }
+
+                // Small extra buffer for UI to stabilize
+                yield return new WaitForSeconds(2f);
+
+                if (!ChallengeFormatState.HasPendingJoin)
+                {
+                    Plugin.Log.LogInfo("Pending join was cleared while waiting");
+                    yield break;
+                }
 
                 var challengeId = ChallengeFormatState.PendingJoinChallengeId;
                 var format = ChallengeFormatState.PendingJoinFormat;
                 ChallengeFormatState.ClearPendingJoin();
 
+                Plugin.Log.LogInfo($"Executing pending join: {challengeId} format={format}");
                 EnhancementSuitePanel.JoinLobby(challengeId, format);
             }
         }
