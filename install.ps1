@@ -112,6 +112,7 @@ try {
     $release = Invoke-RestMethod -Uri $releaseUrl -UseBasicParsing
     $dllAsset = $release.assets | Where-Object { $_.name -eq "MTGAEnhancementSuite.dll" }
     $configAsset = $release.assets | Where-Object { $_.name -eq "config.json" }
+    $bootstrapperAsset = $release.assets | Where-Object { $_.name -eq "MTGAESBootstrapper.dll" }
 
     if (-not $dllAsset) {
         Write-Host "No MTGAEnhancementSuite.dll found in latest release. Aborting." -ForegroundColor Red
@@ -141,6 +142,14 @@ if ($configAsset -and -not (Test-Path $configPath)) {
     Write-Host "  Config installed." -ForegroundColor Green
 } elseif (Test-Path $configPath) {
     Write-Host "  Config already exists, skipping." -ForegroundColor Green
+}
+
+# Download Bootstrapper DLL (handles auto-updates on launch)
+if ($bootstrapperAsset) {
+    $bootstrapperPath = Join-Path $pluginPath "MTGAESBootstrapper.dll"
+    Write-Host "  Downloading bootstrapper..."
+    Invoke-WebRequest -Uri $bootstrapperAsset.browser_download_url -OutFile $bootstrapperPath -UseBasicParsing
+    Write-Host "  Bootstrapper installed." -ForegroundColor Green
 }
 
 # Step 5: Register URL scheme

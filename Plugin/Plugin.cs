@@ -104,6 +104,7 @@ namespace MTGAEnhancementSuite
             SceneManager.sceneLoaded += OnSceneLoaded;
             StartCoroutine(PollForNavBar());
             StartCoroutine(Patches.AuthPatch.WaitForLoginAndAuth());
+            StartCoroutine(AutoUpdater.CheckForUpdate());
 
             // Start named pipe server for receiving URLs from other instances
             TcpIpcServer.OnUrlReceived = OnUrlReceivedFromPipe;
@@ -202,8 +203,8 @@ namespace MTGAEnhancementSuite
                     }
                 }
 
-                // Small extra buffer for UI to stabilize
-                yield return new WaitForSeconds(2f);
+                // Extra buffer for UI to fully stabilize
+                yield return new WaitForSeconds(5f);
 
                 if (!ChallengeFormatState.HasPendingJoin)
                 {
