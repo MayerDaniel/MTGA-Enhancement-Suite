@@ -35,7 +35,13 @@ function Find-MTGAPath {
         "${env:ProgramFiles}\Wizards of the Coast\MTGA",
         "${env:ProgramFiles(x86)}\Wizards of the Coast\MTGA",
         "D:\Program Files\Wizards of the Coast\MTGA",
-        "E:\Program Files\Wizards of the Coast\MTGA"
+        "E:\Program Files\Wizards of the Coast\MTGA",
+        "C:\Program Files (x86)\Steam\steamapps\common\MTGA",
+        "C:\Program Files\Steam\steamapps\common\MTGA",
+        "${env:ProgramFiles(x86)}\Steam\steamapps\common\MTGA",
+        "${env:ProgramFiles}\Steam\steamapps\common\MTGA",
+        "D:\Steam\steamapps\common\MTGA",
+        "E:\Steam\steamapps\common\MTGA"
     )
     foreach ($path in $commonPaths) {
         if (Test-Path (Join-Path $path "MTGA.exe")) { return $path }
