@@ -1,6 +1,6 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule: onScheduleV2 } = require("firebase-functions/v2/scheduler");
-const { onValueCreated } = require("firebase-functions/v2/database");
+const { onValueWritten } = require("firebase-functions/v2/database");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -371,19 +371,25 @@ exports.cleanStaleLobbies = onScheduleV2(
 );
 
 /**
- * Sends a Discord notification when a public lobby is created.
- * Triggers on any new write to /lobbies/{lobbyId}.
+ * Sends a Discord notification when a lobby becomes public.
+ * Triggers on any write to /lobbies/{lobbyId} — only notifies
+ * when isPublic transitions from false/missing to true.
  */
-exports.notifyDiscordOnPublicLobby = onValueCreated(
+exports.notifyDiscordOnPublicLobby = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
     instance: "mtga-enhancement-suite-default-rtdb",
     secrets: [discordWebhookUrl],
   },
   async (event) => {
-    const lobby = event.data.val();
-    if (!lobby || !lobby.isPublic) return;
+    const before = event.data.before.val();
+    const after = event.data.after.val();
 
+    // Only notify when isPublic transitions to true (not on every update)
+    if (!after || !after.isPublic) return;
+    if (before && before.isPublic) return; // already public, skip
+
+    const lobby = after;
     const lobbyId = event.params.lobbyId;
     const host = lobby.hostDisplayName || "Unknown";
     const format = lobby.format || "none";
