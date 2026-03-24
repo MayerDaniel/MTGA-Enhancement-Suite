@@ -28,9 +28,11 @@ This will:
 ### Manual Install
 
 1. Download [BepInEx 5 x64](https://github.com/BepInEx/BepInEx/releases/tag/v5.4.23.2) and extract it into your MTGA directory (`C:\Program Files\Wizards of the Coast\MTGA\`)
-2. Download `MTGAEnhancementSuite.dll` and `config.json` from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest)
-3. Place both files in `<MTGA>\BepInEx\plugins\MTGAEnhancementSuite\`
+2. Download `MTGAEnhancementSuite.dll`, `MTGAESBootstrapper.dll`, and `config.json` from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest)
+3. Place all three files in `<MTGA>\BepInEx\plugins\MTGAEnhancementSuite\`
 4. Launch MTGA normally
+
+> **Note:** The bootstrapper handles auto-updates. Future updates will be downloaded automatically and applied on next restart.
 
 ## Features
 
