@@ -5,6 +5,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
 const discordWebhookUrl = defineSecret("DISCORD_WEBHOOK_URL");
+const discordPlanarStdWebhookUrl = defineSecret("DISCORD_WEBHOOK_PLANAR_STD");
 
 admin.initializeApp({
   databaseURL: "https://mtga-enhancement-suite-default-rtdb.firebaseio.com",
@@ -428,6 +429,64 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
       }
     } catch (err) {
       console.error(`Discord webhook error: ${err.message}`);
+    }
+  }
+);
+
+/**
+ * Sends a Discord notification to the Planar Standard channel
+ * ONLY when a Planar Standard lobby becomes public.
+ */
+exports.notifyDiscordPlanarStandard = onValueWritten(
+  {
+    ref: "/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordPlanarStdWebhookUrl],
+  },
+  async (event) => {
+    const before = event.data.before.val();
+    const after = event.data.after.val();
+
+    if (!after || !after.isPublic) return;
+    if (before && before.isPublic) return;
+    if (after.format !== "planarstandard") return;
+
+    const lobbyId = event.params.lobbyId;
+    const host = after.hostDisplayName || "Unknown";
+    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
+
+    const webhookUrl = discordPlanarStdWebhookUrl.value();
+    if (!webhookUrl) {
+      console.error("DISCORD_WEBHOOK_PLANAR_STD secret not set");
+      return;
+    }
+
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [{
+            title: "⚔️ Planar Standard Lobby Open",
+            color: 0xf5a623,
+            fields: [
+              { name: "Host", value: host, inline: true },
+              { name: "Format", value: "Planar Standard", inline: true },
+            ],
+            url: joinUrl,
+            description: `**[Click to join](${joinUrl})**`,
+            timestamp: new Date().toISOString(),
+          }],
+        }),
+      });
+
+      if (!resp.ok) {
+        console.error(`Planar Std Discord webhook failed: ${resp.status} ${await resp.text()}`);
+      } else {
+        console.log(`Planar Std Discord notified: ${host} (${lobbyId})`);
+      }
+    } catch (err) {
+      console.error(`Planar Std Discord webhook error: ${err.message}`);
     }
   }
 );
