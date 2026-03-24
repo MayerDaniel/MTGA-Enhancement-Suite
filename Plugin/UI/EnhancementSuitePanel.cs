@@ -578,15 +578,66 @@ namespace MTGAEnhancementSuite.UI
             {
                 PerPlayerLog.Error($"ChallengeJoin failed or timed out (success={joinSuccess})");
 
-                // Try to get error info
-                var errorProp = AccessTools.Property(joinPromise.GetType(), "Error");
-                if (errorProp != null)
+                // Log all diagnostic fields
+                try
                 {
-                    var error = errorProp.GetValue(joinPromise);
-                    PerPlayerLog.Error($"Error: {error}");
+                    var promiseType = joinPromise.GetType();
+                    var errorProp = AccessTools.Property(promiseType, "Error");
+                    var errorSourceProp = AccessTools.Property(promiseType, "ErrorSource");
+                    var isConnErrProp = AccessTools.Property(promiseType, "IsConnectionError");
+                    var stateProp = AccessTools.Property(promiseType, "State");
+                    var elapsedProp = AccessTools.Property(promiseType, "ElapsedMilliseconds");
+
+                    if (errorProp != null)
+                    {
+                        var error = errorProp.GetValue(joinPromise);
+                        PerPlayerLog.Error($"Error: {error}");
+                        // Dig into error object fields
+                        if (error != null)
+                        {
+                            foreach (var p in error.GetType().GetProperties())
+                            {
+                                try { PerPlayerLog.Error($"  Error.{p.Name} = {p.GetValue(error)}"); } catch { }
+                            }
+                            foreach (var f in error.GetType().GetFields())
+                            {
+                                try { PerPlayerLog.Error($"  Error.{f.Name} = {f.GetValue(error)}"); } catch { }
+                            }
+                        }
+                    }
+                    if (errorSourceProp != null)
+                        PerPlayerLog.Error($"ErrorSource: {errorSourceProp.GetValue(joinPromise)}");
+                    if (isConnErrProp != null)
+                        PerPlayerLog.Error($"IsConnectionError: {isConnErrProp.GetValue(joinPromise)}");
+                    if (stateProp != null)
+                        PerPlayerLog.Error($"State: {stateProp.GetValue(joinPromise)}");
+                    if (elapsedProp != null)
+                        PerPlayerLog.Error($"ElapsedMilliseconds: {elapsedProp.GetValue(joinPromise)}");
+
+                    // Also try to read the Result even on failure — it may contain a status code
+                    if (resultProp != null)
+                    {
+                        var result = resultProp.GetValue(joinPromise);
+                        if (result != null)
+                        {
+                            PerPlayerLog.Error($"Result type: {result.GetType().FullName}");
+                            foreach (var p in result.GetType().GetProperties())
+                            {
+                                try { PerPlayerLog.Error($"  Result.{p.Name} = {p.GetValue(result)}"); } catch { }
+                            }
+                            foreach (var f in result.GetType().GetFields())
+                            {
+                                try { PerPlayerLog.Error($"  Result.{f.Name} = {f.GetValue(result)}"); } catch { }
+                            }
+                        }
+                    }
+                }
+                catch (Exception diagEx)
+                {
+                    PerPlayerLog.Error($"Failed to read diagnostics: {diagEx.Message}");
                 }
 
-                Toast.Error("Failed to join challenge");
+                Toast.Error("Failed to join challenge. Is the host still in the lobby?");
                 ChallengeFormatState.IsJoining = false;
                 yield break;
             }
