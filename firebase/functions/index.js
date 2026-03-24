@@ -1,6 +1,10 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule: onScheduleV2 } = require("firebase-functions/v2/scheduler");
+const { onValueCreated } = require("firebase-functions/v2/database");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
+
+const discordWebhookUrl = defineSecret("DISCORD_WEBHOOK_URL");
 
 admin.initializeApp({
   databaseURL: "https://mtga-enhancement-suite-default-rtdb.firebaseio.com",
@@ -362,6 +366,62 @@ exports.cleanStaleLobbies = onScheduleV2(
     if (deletions.length > 0) {
       await Promise.all(deletions);
       console.log(`Cleaned up ${deletions.length} stale lobbies`);
+    }
+  }
+);
+
+/**
+ * Sends a Discord notification when a public lobby is created.
+ * Triggers on any new write to /lobbies/{lobbyId}.
+ */
+exports.notifyDiscordOnPublicLobby = onValueCreated(
+  {
+    ref: "/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordWebhookUrl],
+  },
+  async (event) => {
+    const lobby = event.data.val();
+    if (!lobby || !lobby.isPublic) return;
+
+    const lobbyId = event.params.lobbyId;
+    const host = lobby.hostDisplayName || "Unknown";
+    const format = lobby.format || "none";
+    const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
+    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
+
+    const webhookUrl = discordWebhookUrl.value();
+    if (!webhookUrl) {
+      console.error("DISCORD_WEBHOOK_URL secret not set");
+      return;
+    }
+
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [{
+            title: "🎮 New Public Lobby",
+            color: 0x00ff88,
+            fields: [
+              { name: "Host", value: host, inline: true },
+              { name: "Format", value: formatDisplay, inline: true },
+            ],
+            url: joinUrl,
+            description: `**[Click to join](${joinUrl})**`,
+            timestamp: new Date().toISOString(),
+          }],
+        }),
+      });
+
+      if (!resp.ok) {
+        console.error(`Discord webhook failed: ${resp.status} ${await resp.text()}`);
+      } else {
+        console.log(`Discord notified: ${host} hosting ${formatDisplay} (${lobbyId})`);
+      }
+    } catch (err) {
+      console.error(`Discord webhook error: ${err.message}`);
     }
   }
 );
