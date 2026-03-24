@@ -24,6 +24,7 @@ const FORMAT_REGISTRY = {
   historicpauper:     { displayName: "Historic Pauper",       scryfallQuery: '(game:arena) legal:historic rarity:c -"ancestral mask" -"cranial ram" -"galvanic blast" -"persistent petitioners" -"refurbished familiar" -"sneaky snacker" -"kuldotha rebirth"', rawQuery: true },
   standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn) rarity:c prefer:best', rawQuery: true },
   planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
+  modern:             { displayName: "Modern",                scryfallQuery: "legal:modern" },
 };
 
 /**
