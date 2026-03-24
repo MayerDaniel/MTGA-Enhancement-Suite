@@ -543,38 +543,69 @@ namespace MTGAEnhancementSuite.UI
 
             bool? joinSuccess = null;
             object joinResult = null;
+            var isDoneProp = AccessTools.Property(joinPromise.GetType(), "IsDone");
+            var stateProp = AccessTools.Property(joinPromise.GetType(), "State");
 
+            PerPlayerLog.Info($"IsDone prop: {(isDoneProp != null ? "found" : "null")}");
+
+            // Wait for the promise to complete using IsDone, not Successful
             for (int i = 0; i < 30; i++)
             {
                 yield return new WaitForSeconds(0.5f);
 
-                // Try reading Successful — it may throw or return false while pending
-                bool canRead = false;
                 try
                 {
-                    if (successProp != null)
+                    // Check IsDone first — Successful is only valid after the promise resolves
+                    bool isDone = false;
+                    if (isDoneProp != null)
                     {
-                        joinSuccess = (bool)successProp.GetValue(joinPromise);
-                        canRead = true;
+                        isDone = (bool)isDoneProp.GetValue(joinPromise);
                     }
-                }
-                catch
-                {
-                    // Promise not yet resolved
-                }
+                    else if (stateProp != null)
+                    {
+                        // Fallback: check State enum (Pending=0, Resolved=1, Rejected=2)
+                        var state = stateProp.GetValue(joinPromise);
+                        isDone = state.ToString() != "Pending";
+                        PerPlayerLog.Info($"Promise State: {state}");
+                    }
 
-                if (canRead && joinSuccess.HasValue)
-                {
-                    PerPlayerLog.Info($"Promise resolved: Successful={joinSuccess}");
-                    if (joinSuccess == true && resultProp != null)
+                    if (isDone)
                     {
-                        joinResult = resultProp.GetValue(joinPromise);
+                        joinSuccess = successProp != null ? (bool)successProp.GetValue(joinPromise) : false;
+                        PerPlayerLog.Info($"Promise resolved: IsDone=true, Successful={joinSuccess}");
+
+                        // Always try to read Result, even if Successful=false
+                        // The server may have accepted the join even if the promise reports failure
+                        if (resultProp != null)
+                        {
+                            try
+                            {
+                                joinResult = resultProp.GetValue(joinPromise);
+                                PerPlayerLog.Info($"Result: {(joinResult != null ? joinResult.GetType().Name : "null")}");
+                            }
+                            catch (Exception rex)
+                            {
+                                PerPlayerLog.Warning($"Could not read Result: {rex.Message}");
+                            }
+                        }
+                        break;
                     }
-                    break;
+                }
+                catch (Exception ex)
+                {
+                    PerPlayerLog.Warning($"Promise poll error: {ex.Message}");
                 }
             }
 
-            if (joinSuccess != true)
+            // If we got a Result with challenge data, proceed even if Successful=false
+            // The server may have accepted the join (host sees joiner) even when the promise reports failure
+            bool hasValidResult = joinResult != null;
+            if (hasValidResult && joinSuccess != true)
+            {
+                PerPlayerLog.Warning($"Promise reports Successful=false but Result is non-null — proceeding with join");
+            }
+
+            if (!hasValidResult && joinSuccess != true)
             {
                 PerPlayerLog.Error($"ChallengeJoin failed or timed out (success={joinSuccess})");
 
@@ -585,14 +616,12 @@ namespace MTGAEnhancementSuite.UI
                     var errorProp = AccessTools.Property(promiseType, "Error");
                     var errorSourceProp = AccessTools.Property(promiseType, "ErrorSource");
                     var isConnErrProp = AccessTools.Property(promiseType, "IsConnectionError");
-                    var stateProp = AccessTools.Property(promiseType, "State");
                     var elapsedProp = AccessTools.Property(promiseType, "ElapsedMilliseconds");
 
                     if (errorProp != null)
                     {
                         var error = errorProp.GetValue(joinPromise);
                         PerPlayerLog.Error($"Error: {error}");
-                        // Dig into error object fields
                         if (error != null)
                         {
                             foreach (var p in error.GetType().GetProperties())
@@ -609,28 +638,8 @@ namespace MTGAEnhancementSuite.UI
                         PerPlayerLog.Error($"ErrorSource: {errorSourceProp.GetValue(joinPromise)}");
                     if (isConnErrProp != null)
                         PerPlayerLog.Error($"IsConnectionError: {isConnErrProp.GetValue(joinPromise)}");
-                    if (stateProp != null)
-                        PerPlayerLog.Error($"State: {stateProp.GetValue(joinPromise)}");
                     if (elapsedProp != null)
                         PerPlayerLog.Error($"ElapsedMilliseconds: {elapsedProp.GetValue(joinPromise)}");
-
-                    // Also try to read the Result even on failure — it may contain a status code
-                    if (resultProp != null)
-                    {
-                        var result = resultProp.GetValue(joinPromise);
-                        if (result != null)
-                        {
-                            PerPlayerLog.Error($"Result type: {result.GetType().FullName}");
-                            foreach (var p in result.GetType().GetProperties())
-                            {
-                                try { PerPlayerLog.Error($"  Result.{p.Name} = {p.GetValue(result)}"); } catch { }
-                            }
-                            foreach (var f in result.GetType().GetFields())
-                            {
-                                try { PerPlayerLog.Error($"  Result.{f.Name} = {f.GetValue(result)}"); } catch { }
-                            }
-                        }
-                    }
                 }
                 catch (Exception diagEx)
                 {
