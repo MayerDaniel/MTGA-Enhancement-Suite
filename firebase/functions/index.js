@@ -15,8 +15,10 @@ const SCRYFALL_DELAY_MS = 100; // Scryfall asks for 50-100ms between requests
  * Display names are what users see in the spinner.
  */
 const FORMAT_REGISTRY = {
-  pauper:             { displayName: "Pauper",              scryfallQuery: "legal:pauper" },
-  planarstandard:     { displayName: "Planar Standard",     scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
+  pauper:             { displayName: "Pauper (Paper Banlist)", scryfallQuery: "legal:pauper" },
+  historicpauper:     { displayName: "Historic Pauper",       scryfallQuery: '(game:arena) legal:historic rarity:c -"ancestral mask" -"cranial ram" -"galvanic blast" -"persistent petitioners" -"refurbished familiar" -"sneaky snacker" -"kuldotha rebirth"', rawQuery: true },
+  standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn) rarity:c prefer:best', rawQuery: true },
+  planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
 };
 
 /**
