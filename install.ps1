@@ -48,7 +48,9 @@ function Find-MTGAPath {
         "E:\Steam\steamapps\common\MTGA"
     )
     foreach ($path in $commonPaths) {
-        if (Test-Path (Join-Path $path "MTGA.exe")) { return $path }
+        try {
+            if (Test-Path (Join-Path $path "MTGA.exe")) { return $path }
+        } catch {}
     }
 
     # Check Epic Games manifests
