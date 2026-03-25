@@ -40,6 +40,10 @@ function Find-MTGAPath {
         "C:\Program Files\Steam\steamapps\common\MTGA",
         "${env:ProgramFiles(x86)}\Steam\steamapps\common\MTGA",
         "${env:ProgramFiles}\Steam\steamapps\common\MTGA",
+        "C:\SteamLibrary\steamapps\common\MTGA",
+        "D:\SteamLibrary\steamapps\common\MTGA",
+        "E:\SteamLibrary\steamapps\common\MTGA",
+        "F:\SteamLibrary\steamapps\common\MTGA",
         "D:\Steam\steamapps\common\MTGA",
         "E:\Steam\steamapps\common\MTGA"
     )
@@ -67,8 +71,16 @@ function Find-MTGAPath {
 $mtgaPath = Find-MTGAPath
 if (-not $mtgaPath) {
     Write-Host "Could not auto-detect MTGA installation." -ForegroundColor Yellow
-    $mtgaPath = Read-Host "Please enter the path to your MTGA folder (containing MTGA.exe)"
-    if (-not (Test-Path (Join-Path $mtgaPath "MTGA.exe"))) {
+    Write-Host ""
+    Write-Host "Please enter the path to your MTGA folder (the one containing MTGA.exe)." -ForegroundColor White
+    Write-Host "Examples:" -ForegroundColor Gray
+    Write-Host "  C:\Program Files\Wizards of the Coast\MTGA" -ForegroundColor Gray
+    Write-Host "  D:\SteamLibrary\steamapps\common\MTGA" -ForegroundColor Gray
+    Write-Host "  C:\Program Files (x86)\Steam\steamapps\common\MTGA" -ForegroundColor Gray
+    Write-Host ""
+    $mtgaPath = Read-Host "MTGA path"
+    $mtgaPath = $mtgaPath.Trim('"').Trim("'").Trim()
+    if (-not $mtgaPath -or -not (Test-Path (Join-Path $mtgaPath "MTGA.exe"))) {
         Write-Host "MTGA.exe not found at '$mtgaPath'. Aborting." -ForegroundColor Red
         exit 1
     }
