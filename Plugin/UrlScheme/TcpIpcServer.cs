@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -16,34 +15,6 @@ namespace MTGAEnhancementSuite.UrlScheme
     {
         private const int Port = 49164;
 
-#if !UNITY_STANDALONE_OSX
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-        [DllImport("user32.dll")]
-        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-        [DllImport("kernel32.dll")]
-        private static extern uint GetCurrentThreadId();
-
-        [DllImport("user32.dll")]
-        private static extern bool BringWindowToTop(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool IsIconic(IntPtr hWnd);
-
-        private const int SW_RESTORE = 9;
-        private const int SW_SHOW = 5;
-#endif
         private static Thread _serverThread;
         private static TcpListener _listener;
         private static volatile bool _running;
@@ -148,53 +119,11 @@ namespace MTGAEnhancementSuite.UrlScheme
 
         /// <summary>
         /// Brings the MTGA game window to the foreground.
-        /// On Windows uses P/Invoke; on macOS this is a no-op (handled by the URL handler).
+        /// Delegates to shared WindowHelper.
         /// </summary>
         public static void BringGameToFront()
         {
-#if !UNITY_STANDALONE_OSX
-            try
-            {
-                var process = System.Diagnostics.Process.GetCurrentProcess();
-                IntPtr hWnd = process.MainWindowHandle;
-                if (hWnd == IntPtr.Zero)
-                {
-                    Plugin.Log.LogWarning("Could not find MTGA main window handle");
-                    return;
-                }
-
-                // If minimized, restore first
-                if (IsIconic(hWnd))
-                    ShowWindow(hWnd, SW_RESTORE);
-                else
-                    ShowWindow(hWnd, SW_SHOW);
-
-                // Attach to the foreground window's thread input so Windows allows us
-                // to call SetForegroundWindow (otherwise it just flashes the taskbar)
-                IntPtr foregroundHwnd = GetForegroundWindow();
-                uint foregroundThread = GetWindowThreadProcessId(foregroundHwnd, out _);
-                uint currentThread = GetCurrentThreadId();
-
-                if (foregroundThread != currentThread)
-                {
-                    AttachThreadInput(currentThread, foregroundThread, true);
-                    BringWindowToTop(hWnd);
-                    SetForegroundWindow(hWnd);
-                    AttachThreadInput(currentThread, foregroundThread, false);
-                }
-                else
-                {
-                    BringWindowToTop(hWnd);
-                    SetForegroundWindow(hWnd);
-                }
-
-                Plugin.Log.LogInfo("Brought MTGA window to foreground");
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.LogWarning($"Failed to bring window to front: {ex.Message}");
-            }
-#endif
+            Helpers.WindowHelper.BringToFront();
         }
 
         /// <summary>

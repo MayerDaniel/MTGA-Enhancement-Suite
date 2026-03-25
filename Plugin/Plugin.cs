@@ -75,6 +75,7 @@ namespace MTGAEnhancementSuite
             {
                 Patches.ChallengeCreatePatch.Apply(_harmony);
                 Patches.DeckValidationPatch.Apply(_harmony);
+                Patches.ChallengeJoinNotifyPatch.Apply(_harmony);
                 Log.LogInfo("Manual Harmony patches applied");
             }
             catch (Exception ex)
@@ -444,6 +445,6 @@ namespace MTGAEnhancementSuite
     {
         public const string GUID = "com.mtgaenhancement.suite";
         public const string NAME = "MTGA Enhancement Suite";
-        public const string VERSION = "0.2.0";
+        public const string VERSION = "0.4.0";
     }
 }
