@@ -228,7 +228,7 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
 
   const result = {
     format,
-    totalCards: Object.keys(legalCards).length,
+    totalCards: totalFetched,
     syncedAt: new Date().toISOString(),
   };
 
@@ -312,7 +312,7 @@ exports.getAuthToken = onRequest({ cors: true }, async (req, res) => {
 
 /**
  * Validates a deck against the stored legal cards list for a lobby's format.
- * Looks up arena_ids against /formats/{format}/legalCards.
+ * Checks arena_ids against /formats/{format}/legalArenaIds, falls back to legalNames.
  */
 exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
   if (req.method !== "POST") {
