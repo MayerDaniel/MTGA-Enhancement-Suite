@@ -97,13 +97,16 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
   const fullQuery = rawQuery ? query : `${query} game:arena`;
   console.log(`Starting ${format} sync from Scryfall (query: ${fullQuery})...`);
 
-  // Store by card NAME (lowercase) for printing-agnostic checks.
-  // A card is legal if ANY printing is legal in the format.
-  const legalCards = {}; // lowercase card name -> true
+  // Dual storage: arena_ids for language-independent checks,
+  // names as fallback for cards without arena_ids (e.g. om1 crossover cards)
+  const legalArenaIds = {}; // arena_id (string) -> true
+  const legalNames = {};    // lowercase card name -> true
   let page = 1;
   let hasMore = true;
   let totalFetched = 0;
+  let arenaIdCount = 0;
 
+  // First pass: unique=cards to get canonical card names
   while (hasMore) {
     const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=cards&format=json&page=${page}`;
 
@@ -122,37 +125,42 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
 
     for (const card of data.data) {
       const name = card.name.toLowerCase();
-      // Store the full name (e.g. "fire // ice")
-      legalCards[encodeFirebaseKey(name)] = true;
 
-      // Also store each individual face for DFCs/split cards
-      // MTGA returns each face separately (just "Fire", not "Fire // Ice")
+      // Store arena_id if available
+      if (card.arena_id) {
+        legalArenaIds[String(card.arena_id)] = true;
+        arenaIdCount++;
+      }
+
+      // Always store names as fallback (for cards without arena_id)
+      legalNames[encodeFirebaseKey(name)] = true;
+
+      // Individual faces for DFCs/split cards
       if (name.includes(" // ")) {
         for (const face of name.split(" // ")) {
-          legalCards[encodeFirebaseKey(face.trim())] = true;
+          legalNames[encodeFirebaseKey(face.trim())] = true;
         }
       }
 
-      // Store printed_name too (paper equivalent for IP crossover cards like om1 Marvel set)
-      // MTGA may use either the IP name or the paper name depending on user settings
+      // printed_name for IP crossover cards (om1 Marvel set etc.)
       if (card.printed_name) {
         const printedName = card.printed_name.toLowerCase();
-        legalCards[encodeFirebaseKey(printedName)] = true;
+        legalNames[encodeFirebaseKey(printedName)] = true;
         if (printedName.includes(" // ")) {
           for (const face of printedName.split(" // ")) {
-            legalCards[encodeFirebaseKey(face.trim())] = true;
+            legalNames[encodeFirebaseKey(face.trim())] = true;
           }
         }
       }
 
-      // Also check card_faces for DFCs with separate printed_names
+      // Card faces for DFCs with separate printed_names
       if (card.card_faces) {
         for (const face of card.card_faces) {
           if (face.name) {
-            legalCards[encodeFirebaseKey(face.name.toLowerCase())] = true;
+            legalNames[encodeFirebaseKey(face.name.toLowerCase())] = true;
           }
           if (face.printed_name) {
-            legalCards[encodeFirebaseKey(face.printed_name.toLowerCase())] = true;
+            legalNames[encodeFirebaseKey(face.printed_name.toLowerCase())] = true;
           }
         }
       }
@@ -166,13 +174,54 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
     await sleep(SCRYFALL_DELAY_MS);
   }
 
-  console.log(`Fetched ${totalFetched} cards, ${Object.keys(legalCards).length} with arena_ids`);
+  // Second pass: unique=prints to collect ALL arena_ids across all printings
+  // A card legal in pauper via one printing should match any arena printing
+  console.log(`First pass done: ${totalFetched} cards. Collecting all arena_ids from prints...`);
+  page = 1;
+  hasMore = true;
+
+  while (hasMore) {
+    const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=prints&format=json&page=${page}`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        console.log("Rate limited, waiting 1s...");
+        await sleep(1000);
+        continue;
+      }
+      // If prints query fails (e.g. too many results), just use what we have
+      console.log(`Prints query failed on page ${page}: ${response.status}, using first-pass arena_ids`);
+      break;
+    }
+
+    const data = await response.json();
+
+    for (const card of data.data) {
+      if (card.arena_id) {
+        if (!legalArenaIds[String(card.arena_id)]) {
+          legalArenaIds[String(card.arena_id)] = true;
+          arenaIdCount++;
+        }
+      }
+    }
+
+    hasMore = data.has_more;
+    page++;
+    await sleep(SCRYFALL_DELAY_MS);
+  }
+
+  console.log(`Fetched ${totalFetched} unique cards, ${arenaIdCount} arena_ids, ${Object.keys(legalNames).length} name entries`);
 
   // Write to Firebase in one batch
   const update = {
-    legalCards,
+    legalArenaIds,
+    legalNames,
     lastSync: admin.database.ServerValue.TIMESTAMP,
-    totalCards: Object.keys(legalCards).length,
+    totalCards: totalFetched,
+    totalArenaIds: arenaIdCount,
+    totalNames: Object.keys(legalNames).length,
   };
 
   await admin.database().ref(`formats/${format}`).set(update);
@@ -297,20 +346,21 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     return;
   }
 
-  // Get the legal cards list for this format
-  const formatSnap = await admin
-    .database()
-    .ref(`formats/${format}/legalCards`)
-    .once("value");
+  // Get the legal arena IDs and name fallbacks for this format
+  const [idsSnap, namesSnap] = await Promise.all([
+    admin.database().ref(`formats/${format}/legalArenaIds`).once("value"),
+    admin.database().ref(`formats/${format}/legalNames`).once("value"),
+  ]);
 
-  if (!formatSnap.exists()) {
+  if (!idsSnap.exists() && !namesSnap.exists()) {
     res.status(500).json({
-      error: `Legal cards list for ${format} not synced yet. Run syncPauperListHttp first.`,
+      error: `Legal cards list for ${format} not synced yet. Run syncFormatsHttp first.`,
     });
     return;
   }
 
-  const legalCards = formatSnap.val(); // { arena_id: card_name, ... }
+  const legalArenaIds = idsSnap.val() || {};
+  const legalNames = namesSnap.val() || {};
 
   const illegalCards = [];
 
@@ -320,14 +370,21 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     // Skip basic lands (rarity 1)
     if (card.rarityValue === 1) continue;
 
-    if (!legalCards[arenaId]) {
-      illegalCards.push({
-        grpId: card.grpId,
-        name: card.name,
-        quantity: card.quantity,
-        rarity: card.rarityName || "Unknown",
-      });
+    // Primary: check arena_id
+    if (legalArenaIds[arenaId]) continue;
+
+    // Fallback: check card name (for cards without arena_id)
+    if (card.name) {
+      const encodedName = encodeFirebaseKey(card.name.toLowerCase());
+      if (legalNames[encodedName]) continue;
     }
+
+    illegalCards.push({
+      grpId: card.grpId,
+      name: card.name,
+      quantity: card.quantity,
+      rarity: card.rarityName || "Unknown",
+    });
   }
 
   if (illegalCards.length === 0) {

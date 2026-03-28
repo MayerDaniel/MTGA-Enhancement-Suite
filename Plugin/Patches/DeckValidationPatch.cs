@@ -19,7 +19,8 @@ namespace MTGAEnhancementSuite.Patches
     internal static class DeckValidationPatch
     {
         private static bool _bypassValidation = false;
-        private static HashSet<string> _cachedLegalCards;
+        private static HashSet<uint> _cachedLegalArenaIds;
+        private static HashSet<string> _cachedLegalNames; // fallback for cards without arena_id
         private static string _cachedFormat;
 
         public static void Apply(Harmony harmony)
@@ -115,56 +116,77 @@ namespace MTGAEnhancementSuite.Patches
             }
 
             // Step 1: Get the legal cards list from Firebase (with caching)
-            HashSet<string> legalCards = null;
+            HashSet<uint> legalArenaIds = null;
+            HashSet<string> legalNames = null;
             string format = ChallengeFormatState.SelectedFormat;
 
-            if (_cachedFormat == format && _cachedLegalCards != null)
+            if (_cachedFormat == format && _cachedLegalArenaIds != null)
             {
-                legalCards = _cachedLegalCards;
-                Plugin.Log.LogInfo($"Using cached {format} legal cards list ({legalCards.Count} cards)");
+                legalArenaIds = _cachedLegalArenaIds;
+                legalNames = _cachedLegalNames;
+                Plugin.Log.LogInfo($"Using cached {format} legal list ({legalArenaIds.Count} arena_ids, {legalNames?.Count ?? 0} names)");
             }
             else
             {
-                bool fetchDone = false;
-                JToken fetchResult = null;
-
-                FirebaseClient.Instance.DatabaseGet($"formats/{format}/legalCards", result =>
+                // Fetch arena IDs
+                bool fetchIdsDone = false;
+                JToken fetchIdsResult = null;
+                FirebaseClient.Instance.DatabaseGet($"formats/{format}/legalArenaIds", result =>
                 {
-                    fetchResult = result;
-                    fetchDone = true;
+                    fetchIdsResult = result;
+                    fetchIdsDone = true;
                 });
 
-                float timeout = 15f;
-                while (!fetchDone && timeout > 0f)
+                // Fetch names (fallback) in parallel
+                bool fetchNamesDone = false;
+                JToken fetchNamesResult = null;
+                FirebaseClient.Instance.DatabaseGet($"formats/{format}/legalNames", result =>
+                {
+                    fetchNamesResult = result;
+                    fetchNamesDone = true;
+                });
+
+                float timeout = 30f;
+                while ((!fetchIdsDone || !fetchNamesDone) && timeout > 0f)
                 {
                     yield return new WaitForSeconds(0.1f);
                     timeout -= 0.1f;
                 }
 
-                if (!fetchDone || fetchResult == null || fetchResult.Type == JTokenType.Null)
+                if (!fetchIdsDone || (fetchIdsResult == null && fetchNamesResult == null))
                 {
                     Toast.Error($"Could not fetch {format} legal cards list. Is the format synced?");
-                    // Allow deck selection anyway if we can't validate
                     _bypassValidation = true;
                     var m = AccessTools.Method(controller.GetType(), "SetDeckForChallenge");
                     m.Invoke(controller, new object[] { challengeId, deckId });
                     yield break;
                 }
 
-                legalCards = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (fetchResult is JObject legalObj)
+                // Parse arena IDs
+                legalArenaIds = new HashSet<uint>();
+                if (fetchIdsResult is JObject idsObj)
                 {
-                    // Keys are lowercase card names, URL-encoded for Firebase key safety
-                    foreach (var prop in legalObj.Properties())
+                    foreach (var prop in idsObj.Properties())
                     {
-                        var name = DecodeFirebaseKey(prop.Name);
-                        legalCards.Add(name);
+                        if (uint.TryParse(prop.Name, out uint id))
+                            legalArenaIds.Add(id);
                     }
                 }
 
-                _cachedLegalCards = legalCards;
+                // Parse name fallbacks
+                legalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (fetchNamesResult is JObject namesObj)
+                {
+                    foreach (var prop in namesObj.Properties())
+                    {
+                        legalNames.Add(DecodeFirebaseKey(prop.Name));
+                    }
+                }
+
+                _cachedLegalArenaIds = legalArenaIds;
+                _cachedLegalNames = legalNames;
                 _cachedFormat = format;
-                Plugin.Log.LogInfo($"Fetched {format} legal cards list: {legalCards.Count} cards");
+                Plugin.Log.LogInfo($"Fetched {format} legal list: {legalArenaIds.Count} arena_ids, {legalNames.Count} name fallbacks");
             }
 
             // Step 2: Get the deck's card list
@@ -190,31 +212,31 @@ namespace MTGAEnhancementSuite.Patches
                 yield break;
             }
 
-            // Step 3: Check each card against the legal list BY NAME
-            // This is printing-agnostic: if any printing of "Plains" is legal,
-            // all printings are allowed
+            // Step 3: Check each card — GRPID first (language-independent), name fallback
             var illegalCards = new List<string>();
-            var checkedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var checkedIds = new HashSet<uint>();
 
             foreach (var card in deckCards)
             {
-                // Skip cards we've already checked (same name, different printing)
-                if (checkedNames.Contains(card.Name))
+                // Skip cards we've already checked (same grpId)
+                if (checkedIds.Contains(card.ArenaId))
+                    continue;
+                checkedIds.Add(card.ArenaId);
+
+                // Primary check: arena_id (language-independent, covers 99% of cards)
+                if (legalArenaIds.Contains(card.ArenaId))
                     continue;
 
-                checkedNames.Add(card.Name);
-
-                // Skip cards with fallback names (Card#123) — can't validate without a name
-                if (card.Name.StartsWith("Card#"))
-                {
-                    Plugin.Log.LogWarning($"Could not resolve name for grpId {card.ArenaId}, skipping validation");
+                // Fallback check: card name (for cards without arena_id like om1 crossover)
+                if (!card.Name.StartsWith("Card#") && legalNames != null && legalNames.Contains(card.Name))
                     continue;
-                }
 
-                if (!legalCards.Contains(card.Name))
-                {
-                    illegalCards.Add($"{card.Name} x{card.Quantity}");
-                }
+                // Card is illegal — use name for display, fall back to grpId
+                string displayName = card.Name.StartsWith("Card#")
+                    ? $"Unknown card (ID: {card.ArenaId})"
+                    : card.Name;
+                illegalCards.Add($"{displayName} x{card.Quantity}");
+                Plugin.Log.LogInfo($"Illegal card: {displayName} (grpId={card.ArenaId})");
             }
 
             // Step 4: Result
