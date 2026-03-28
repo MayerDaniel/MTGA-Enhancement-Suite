@@ -320,26 +320,30 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     return;
   }
 
-  const { challengeId, decklist } = req.body;
+  const { challengeId, format: bodyFormat, decklist } = req.body;
 
-  if (!challengeId || !decklist || !Array.isArray(decklist)) {
-    res.status(400).json({ error: "Missing challengeId or decklist" });
+  if (!decklist || !Array.isArray(decklist)) {
+    res.status(400).json({ error: "Missing decklist array" });
     return;
   }
 
-  // Get the lobby to find its format
-  const lobbySnap = await admin
-    .database()
-    .ref(`lobbies/${challengeId}`)
-    .once("value");
+  // Format can come from the request body directly, or looked up from the lobby
+  let format = bodyFormat;
+  if (!format && challengeId) {
+    const lobbySnap = await admin
+      .database()
+      .ref(`lobbies/${challengeId}`)
+      .once("value");
 
-  if (!lobbySnap.exists()) {
-    res.status(404).json({ error: "Lobby not found" });
-    return;
+    if (lobbySnap.exists()) {
+      format = lobbySnap.val().format;
+    }
   }
 
-  const lobby = lobbySnap.val();
-  const format = lobby.format;
+  if (!format) {
+    res.status(400).json({ error: "No format specified and no lobby found" });
+    return;
+  }
 
   if (!format || format === "none") {
     res.json({ valid: true });

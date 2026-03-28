@@ -19,9 +19,6 @@ namespace MTGAEnhancementSuite.Patches
     internal static class DeckValidationPatch
     {
         private static bool _bypassValidation = false;
-        private static HashSet<uint> _cachedLegalArenaIds;
-        private static HashSet<string> _cachedLegalNames; // fallback for cards without arena_id
-        private static string _cachedFormat;
 
         public static void Apply(Harmony harmony)
         {
@@ -115,81 +112,9 @@ namespace MTGAEnhancementSuite.Patches
                 }
             }
 
-            // Step 1: Get the legal cards list from Firebase (with caching)
-            HashSet<uint> legalArenaIds = null;
-            HashSet<string> legalNames = null;
             string format = ChallengeFormatState.SelectedFormat;
 
-            if (_cachedFormat == format && _cachedLegalArenaIds != null)
-            {
-                legalArenaIds = _cachedLegalArenaIds;
-                legalNames = _cachedLegalNames;
-                Plugin.Log.LogInfo($"Using cached {format} legal list ({legalArenaIds.Count} arena_ids, {legalNames?.Count ?? 0} names)");
-            }
-            else
-            {
-                // Fetch arena IDs
-                bool fetchIdsDone = false;
-                JToken fetchIdsResult = null;
-                FirebaseClient.Instance.DatabaseGet($"formats/{format}/legalArenaIds", result =>
-                {
-                    fetchIdsResult = result;
-                    fetchIdsDone = true;
-                });
-
-                // Fetch names (fallback) in parallel
-                bool fetchNamesDone = false;
-                JToken fetchNamesResult = null;
-                FirebaseClient.Instance.DatabaseGet($"formats/{format}/legalNames", result =>
-                {
-                    fetchNamesResult = result;
-                    fetchNamesDone = true;
-                });
-
-                float timeout = 30f;
-                while ((!fetchIdsDone || !fetchNamesDone) && timeout > 0f)
-                {
-                    yield return new WaitForSeconds(0.1f);
-                    timeout -= 0.1f;
-                }
-
-                if (!fetchIdsDone || (fetchIdsResult == null && fetchNamesResult == null))
-                {
-                    Toast.Error($"Could not fetch {format} legal cards list. Is the format synced?");
-                    _bypassValidation = true;
-                    var m = AccessTools.Method(controller.GetType(), "SetDeckForChallenge");
-                    m.Invoke(controller, new object[] { challengeId, deckId });
-                    yield break;
-                }
-
-                // Parse arena IDs
-                legalArenaIds = new HashSet<uint>();
-                if (fetchIdsResult is JObject idsObj)
-                {
-                    foreach (var prop in idsObj.Properties())
-                    {
-                        if (uint.TryParse(prop.Name, out uint id))
-                            legalArenaIds.Add(id);
-                    }
-                }
-
-                // Parse name fallbacks
-                legalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (fetchNamesResult is JObject namesObj)
-                {
-                    foreach (var prop in namesObj.Properties())
-                    {
-                        legalNames.Add(DecodeFirebaseKey(prop.Name));
-                    }
-                }
-
-                _cachedLegalArenaIds = legalArenaIds;
-                _cachedLegalNames = legalNames;
-                _cachedFormat = format;
-                Plugin.Log.LogInfo($"Fetched {format} legal list: {legalArenaIds.Count} arena_ids, {legalNames.Count} name fallbacks");
-            }
-
-            // Step 2: Get the deck's card list
+            // Step 1: Extract the deck's card list locally
             List<DeckCard> deckCards = null;
             string error = null;
 
@@ -212,37 +137,79 @@ namespace MTGAEnhancementSuite.Patches
                 yield break;
             }
 
-            // Step 3: Check each card — GRPID first (language-independent), name fallback
-            var illegalCards = new List<string>();
-            var checkedIds = new HashSet<uint>();
-
+            // Step 2: POST decklist to validateDeck Cloud Function
+            var decklistJson = new JArray();
             foreach (var card in deckCards)
             {
-                // Skip cards we've already checked (same grpId)
-                if (checkedIds.Contains(card.ArenaId))
-                    continue;
-                checkedIds.Add(card.ArenaId);
-
-                // Primary check: arena_id (language-independent, covers 99% of cards)
-                if (legalArenaIds.Contains(card.ArenaId))
-                    continue;
-
-                // Fallback check: card name (for cards without arena_id like om1 crossover)
-                if (!card.Name.StartsWith("Card#") && legalNames != null && legalNames.Contains(card.Name))
-                    continue;
-
-                // Card is illegal — use name for display, fall back to grpId
-                string displayName = card.Name.StartsWith("Card#")
-                    ? $"Unknown card (ID: {card.ArenaId})"
-                    : card.Name;
-                illegalCards.Add($"{displayName} x{card.Quantity}");
-                Plugin.Log.LogInfo($"Illegal card: {displayName} (grpId={card.ArenaId})");
+                var cardObj = new JObject
+                {
+                    ["grpId"] = card.ArenaId,
+                    ["name"] = card.Name,
+                    ["quantity"] = card.Quantity
+                };
+                decklistJson.Add(cardObj);
             }
 
-            // Step 4: Result
-            if (illegalCards.Count == 0)
+            var payload = new JObject
             {
-                Plugin.Log.LogInfo("Deck validation passed");
+                ["challengeId"] = ChallengeFormatState.ActiveChallengeId.ToString(),
+                ["format"] = format,
+                ["decklist"] = decklistJson
+            };
+
+            Plugin.Log.LogInfo($"Sending {deckCards.Count} cards to validateDeck for format {format}");
+
+            bool requestDone = false;
+            JObject responseData = null;
+            string requestError = null;
+
+            FirebaseClient.Instance.CallCloudFunction("validateDeck", payload.ToString(),
+                (success, responseBody) =>
+                {
+                    if (success && !string.IsNullOrEmpty(responseBody))
+                    {
+                        try { responseData = JObject.Parse(responseBody); }
+                        catch { requestError = "Invalid response from server"; }
+                    }
+                    else
+                    {
+                        requestError = responseBody ?? "Request failed";
+                    }
+                    requestDone = true;
+                });
+
+            float timeout = 20f;
+            while (!requestDone && timeout > 0f)
+            {
+                yield return new WaitForSeconds(0.1f);
+                timeout -= 0.1f;
+            }
+
+            if (!requestDone)
+            {
+                Toast.Warning("Validation timed out, allowing selection");
+                _bypassValidation = true;
+                var m = AccessTools.Method(controller.GetType(), "SetDeckForChallenge");
+                m.Invoke(controller, new object[] { challengeId, deckId });
+                yield break;
+            }
+
+            if (requestError != null)
+            {
+                Plugin.Log.LogError($"validateDeck error: {requestError}");
+                Toast.Warning("Could not validate deck, allowing selection");
+                _bypassValidation = true;
+                var m = AccessTools.Method(controller.GetType(), "SetDeckForChallenge");
+                m.Invoke(controller, new object[] { challengeId, deckId });
+                yield break;
+            }
+
+            // Step 3: Process response
+            bool valid = responseData["valid"]?.Value<bool>() ?? true;
+
+            if (valid)
+            {
+                Plugin.Log.LogInfo("Deck validation passed (server)");
                 Toast.Success("Deck is legal!");
 
                 _bypassValidation = true;
@@ -251,22 +218,32 @@ namespace MTGAEnhancementSuite.Patches
             }
             else
             {
-                string formatName = format.Substring(0, 1).ToUpper() + format.Substring(1);
+                var illegalArray = responseData["illegalCards"] as JArray;
+                string formatName = responseData["format"]?.ToString() ?? format;
+                formatName = formatName.Substring(0, 1).ToUpper() + formatName.Substring(1);
+
                 string message = $"Deck not legal in {formatName}.\n\nIllegal cards:\n";
                 int shown = 0;
-                foreach (var c in illegalCards)
+                int total = illegalArray?.Count ?? 0;
+
+                if (illegalArray != null)
                 {
-                    message += $"  - {c}\n";
-                    shown++;
-                    if (shown >= 15)
+                    foreach (var card in illegalArray)
                     {
-                        message += $"  ... and {illegalCards.Count - shown} more\n";
-                        break;
+                        var name = card["name"]?.ToString() ?? $"ID: {card["grpId"]}";
+                        var qty = card["quantity"]?.Value<int>() ?? 1;
+                        message += $"  - {name} x{qty}\n";
+                        shown++;
+                        if (shown >= 15)
+                        {
+                            message += $"  ... and {total - shown} more\n";
+                            break;
+                        }
                     }
                 }
 
                 Plugin.Log.LogWarning(message);
-                Toast.Error($"Deck not legal in {formatName} ({illegalCards.Count} illegal cards)");
+                Toast.Error($"Deck not legal in {formatName} ({total} illegal cards)");
                 ShowErrorDialog("Deck Not Legal", message);
             }
         }
@@ -414,18 +391,6 @@ namespace MTGAEnhancementSuite.Patches
             }
 
             Plugin.Log.LogWarning($"[{title}] {message}");
-        }
-
-        private static string DecodeFirebaseKey(string key)
-        {
-            return key
-                .Replace("%2F", "/").Replace("%2f", "/")
-                .Replace("%5D", "]").Replace("%5d", "]")
-                .Replace("%5B", "[").Replace("%5b", "[")
-                .Replace("%23", "#")
-                .Replace("%24", "$")
-                .Replace("%2E", ".").Replace("%2e", ".")
-                .Replace("%25", "%");
         }
 
         private struct DeckCard

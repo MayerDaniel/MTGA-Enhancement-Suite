@@ -602,6 +602,44 @@ namespace MTGAEnhancementSuite.Firebase
             }
         }
 
+        /// <summary>
+        /// POSTs JSON to a Cloud Function endpoint. Callback receives (success, responseBody).
+        /// </summary>
+        public void CallCloudFunction(string functionName, string jsonBody, Action<bool, string> callback)
+        {
+            StartCoroutine(CallCloudFunctionCoroutine(functionName, jsonBody, callback));
+        }
+
+        private IEnumerator CallCloudFunctionCoroutine(string functionName, string jsonBody, Action<bool, string> callback)
+        {
+            var fnConfig = FirebaseConfig.Instance;
+            var url = $"{fnConfig.FunctionUrl}/{functionName}";
+            Plugin.Log.LogInfo($"CallCloudFunction: POST {url} ({jsonBody.Length} bytes)");
+
+            using (var request = new UnityWebRequest(url, "POST"))
+            {
+                var bodyBytes = System.Text.Encoding.UTF8.GetBytes(jsonBody);
+                request.uploadHandler = new UploadHandlerRaw(bodyBytes);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+
+                if (!string.IsNullOrEmpty(_idToken))
+                    request.SetRequestHeader("Authorization", $"Bearer {_idToken}");
+
+                yield return request.SendWebRequest();
+
+                if (request.responseCode >= 200 && request.responseCode < 300)
+                {
+                    callback?.Invoke(true, request.downloadHandler.text);
+                }
+                else
+                {
+                    Plugin.Log.LogError($"CallCloudFunction {functionName}: HTTP {request.responseCode} - {request.downloadHandler?.text}");
+                    callback?.Invoke(false, request.downloadHandler?.text ?? request.error);
+                }
+            }
+        }
+
         private bool EnsureAuthenticated()
         {
             return _isAuthenticated && !string.IsNullOrEmpty(_idToken);
