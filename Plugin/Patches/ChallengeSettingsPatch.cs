@@ -494,6 +494,26 @@ namespace MTGAEnhancementSuite.Patches
 
                 // Register the lobby (full PUT) if it doesn't exist yet, then start heartbeat.
                 // ChallengeCreatePatch may or may not have created it depending on timing.
+                // Read Bo3 state from the game's bestOf spinner
+                bool isBo3 = ChallengeFormatState.IsBestOf3;
+                try
+                {
+                    var bestOfField = AccessTools.Field(typeof(UnifiedChallengeBladeWidget), "_bestOfSpinner");
+                    if (bestOfField != null)
+                    {
+                        var bestOfSpinner = bestOfField.GetValue(widget) as Spinner_OptionSelector;
+                        if (bestOfSpinner != null)
+                        {
+                            isBo3 = bestOfSpinner.ValueIndex == 1;
+                            ChallengeFormatState.IsBestOf3 = isBo3;
+                        }
+                    }
+                }
+                catch (Exception ex2)
+                {
+                    Plugin.Log.LogWarning($"Could not read bestOf spinner: {ex2.Message}");
+                }
+
                 FirebaseClient.Instance.RegisterLobby(
                     challengeIdStr,
                     ChallengeFormatState.SelectedFormat,
@@ -514,7 +534,8 @@ namespace MTGAEnhancementSuite.Patches
                             Toast.Error("Failed to make lobby public");
                             Plugin.Log.LogError($"MakePublic failed for {challengeIdStr}");
                         }
-                    }
+                    },
+                    isBo3
                 );
             }
             catch (Exception ex)
@@ -560,7 +581,8 @@ namespace MTGAEnhancementSuite.Patches
                         {
                             PerPlayerLog.Warning($"Failed to register lobby {challengeId}");
                         }
-                    }
+                    },
+                    ChallengeFormatState.IsBestOf3
                 );
             }
             catch (Exception ex)

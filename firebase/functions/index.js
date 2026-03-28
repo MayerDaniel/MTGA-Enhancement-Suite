@@ -457,6 +457,7 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     const host = lobby.hostDisplayName || "Unknown";
     const format = lobby.format || "none";
     const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
+    const bestOf = lobby.isBestOf3 ? "Bo3" : "Bo1";
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
 
     const webhookUrl = discordWebhookUrl.value();
@@ -476,6 +477,7 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
             fields: [
               { name: "Host", value: host, inline: true },
               { name: "Format", value: formatDisplay, inline: true },
+              { name: "Best Of", value: bestOf, inline: true },
             ],
             url: joinUrl,
             description: `**[Click to join](${joinUrl})**`,
@@ -515,6 +517,7 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
 
     const lobbyId = event.params.lobbyId;
     const host = after.hostDisplayName || "Unknown";
+    const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
 
     const webhookUrl = discordPlanarStdWebhookUrl.value();
@@ -534,6 +537,7 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
             fields: [
               { name: "Host", value: host, inline: true },
               { name: "Format", value: "Planar Standard", inline: true },
+              { name: "Best Of", value: bestOf, inline: true },
             ],
             url: joinUrl,
             description: `**[Click to join](${joinUrl})**`,

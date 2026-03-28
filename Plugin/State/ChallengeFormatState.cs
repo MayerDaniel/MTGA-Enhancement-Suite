@@ -7,6 +7,7 @@ namespace MTGAEnhancementSuite.State
     {
         public static string SelectedFormat = "none";
         public static Guid ActiveChallengeId = Guid.Empty;
+        public static bool IsBestOf3 = false;
 
         /// <summary>True when a format is selected (not "none").</summary>
         public static bool HasFormat => SelectedFormat != "none";
@@ -77,6 +78,7 @@ namespace MTGAEnhancementSuite.State
         {
             SelectedFormat = "none";
             ActiveChallengeId = Guid.Empty;
+            IsBestOf3 = false;
             IsJoining = false;
             IsInMatch = false;
             InLobbySession = false;

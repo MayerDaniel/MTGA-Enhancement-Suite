@@ -323,12 +323,13 @@ namespace MTGAEnhancementSuite.UI
                     var challengeId = prop.Name;
                     var hostName = lobby["hostDisplayName"]?.ToString() ?? "Unknown";
                     var format = lobby["format"]?.ToString() ?? "none";
+                    var isBo3 = lobby["isBestOf3"]?.Value<bool>() ?? false;
 
                     // Apply format filter
                     if (_filterFormat != "all" && format != _filterFormat)
                         continue;
 
-                    CreateLobbyRow(challengeId, hostName, format);
+                    CreateLobbyRow(challengeId, hostName, format, isBo3);
                     count++;
                 }
 
@@ -358,7 +359,7 @@ namespace MTGAEnhancementSuite.UI
                 UnityEngine.Object.Destroy(_lobbyListContainer.GetChild(i).gameObject);
         }
 
-        private static void CreateLobbyRow(string challengeId, string hostName, string format)
+        private static void CreateLobbyRow(string challengeId, string hostName, string format, bool isBo3)
         {
             if (_lobbyListContainer == null) return;
 
@@ -400,6 +401,17 @@ namespace MTGAEnhancementSuite.UI
             formatText.fontSize = 16;
             formatText.color = new Color(0.4f, 0.8f, 1f);
             formatText.alignment = TextAlignmentOptions.Center;
+
+            // Bo1/Bo3
+            var boObj = new GameObject("BestOf");
+            boObj.transform.SetParent(row.transform, false);
+            var boLe = boObj.AddComponent<LayoutElement>();
+            boLe.preferredWidth = 45;
+            var boText = boObj.AddComponent<TextMeshProUGUI>();
+            boText.text = isBo3 ? "Bo3" : "Bo1";
+            boText.fontSize = 14;
+            boText.color = isBo3 ? new Color(1f, 0.8f, 0.3f) : new Color(0.6f, 0.6f, 0.7f);
+            boText.alignment = TextAlignmentOptions.Center;
 
             // Join button
             var joinObj = new GameObject("JoinBtn");

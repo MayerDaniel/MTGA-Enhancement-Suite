@@ -136,15 +136,16 @@ namespace MTGAEnhancementSuite.Firebase
         /// Register a challenge lobby in the Realtime Database.
         /// </summary>
         public void RegisterLobby(string challengeId, string format, string hostDisplayName,
-            string hostPlayerId, string matchType, bool isPublic, Action<bool> callback)
+            string hostPlayerId, string matchType, bool isPublic, Action<bool> callback,
+            bool isBestOf3 = false)
         {
             StartCoroutine(RegisterLobbyCoroutine(challengeId, format, hostDisplayName,
-                hostPlayerId, matchType, isPublic, callback));
+                hostPlayerId, matchType, isPublic, callback, isBestOf3));
         }
 
         private IEnumerator RegisterLobbyCoroutine(string challengeId, string format,
             string hostDisplayName, string hostPlayerId, string matchType,
-            bool isPublic, Action<bool> callback)
+            bool isPublic, Action<bool> callback, bool isBestOf3)
         {
             if (!EnsureAuthenticated())
             {
@@ -169,7 +170,8 @@ namespace MTGAEnhancementSuite.Firebase
                 ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 ["lastHeartbeat"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 ["status"] = "open",
-                ["isPublic"] = isPublic
+                ["isPublic"] = isPublic,
+                ["isBestOf3"] = isBestOf3
             };
 
             var json = lobbyData.ToString(Formatting.None);
@@ -306,6 +308,12 @@ namespace MTGAEnhancementSuite.Firebase
         public void UpdateLobbyFormat(string challengeId, string format, Action<bool> callback = null)
         {
             var json = $"{{\"format\":\"{format}\"}}";
+            PatchLobby(challengeId, json, callback);
+        }
+
+        public void UpdateLobbyBestOf(string challengeId, bool isBestOf3, Action<bool> callback = null)
+        {
+            var json = $"{{\"isBestOf3\":{(isBestOf3 ? "true" : "false")}}}";
             PatchLobby(challengeId, json, callback);
         }
 

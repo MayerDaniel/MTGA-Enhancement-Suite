@@ -76,6 +76,7 @@ namespace MTGAEnhancementSuite
                 Patches.ChallengeCreatePatch.Apply(_harmony);
                 Patches.DeckValidationPatch.Apply(_harmony);
                 Patches.ChallengeJoinNotifyPatch.Apply(_harmony);
+                Patches.BestOfPatch.Apply(_harmony);
                 Log.LogInfo("Manual Harmony patches applied");
             }
             catch (Exception ex)
