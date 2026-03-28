@@ -338,18 +338,35 @@ namespace MTGAEnhancementSuite.Patches
 
                     if (cardTitleProvider != null && getCardTitleMethod != null)
                     {
-                        try
+                        // Try English first, then client locale, then give up
+                        string resolvedName = null;
+                        foreach (var langCode in new[] { "en-US", null })
                         {
-                            // formatted=false to get plain text, "en" to force English regardless of client locale
-                            var name = getCardTitleMethod.Invoke(cardTitleProvider,
-                                new object[] { grpId, false, "en" }) as string;
-                            if (!string.IsNullOrEmpty(name))
+                            try
                             {
-                                // Strip any residual HTML tags (e.g. <nobr>Deep-Cavern</nobr>)
-                                cardName = System.Text.RegularExpressions.Regex.Replace(name, "<[^>]+>", "");
+                                var name = getCardTitleMethod.Invoke(cardTitleProvider,
+                                    new object[] { grpId, false, langCode }) as string;
+                                if (!string.IsNullOrEmpty(name) && !name.StartsWith("Unknown Card Title"))
+                                {
+                                    resolvedName = System.Text.RegularExpressions.Regex.Replace(name, "<[^>]+>", "");
+                                    break;
+                                }
                             }
+                            catch { }
                         }
-                        catch { }
+
+                        if (resolvedName != null)
+                        {
+                            cardName = resolvedName;
+                        }
+                        else
+                        {
+                            Plugin.Log.LogWarning($"Could not resolve name for grpId={grpId}, sending as Card#{grpId}");
+                        }
+                    }
+                    else
+                    {
+                        Plugin.Log.LogWarning($"CardTitleProvider not available, using Card#{grpId}");
                     }
 
                     result.Add(new DeckCard
