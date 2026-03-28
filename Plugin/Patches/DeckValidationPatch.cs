@@ -340,9 +340,9 @@ namespace MTGAEnhancementSuite.Patches
                     {
                         try
                         {
-                            // formatted=false to get plain text without HTML tags like <nobr>
+                            // formatted=false to get plain text, "en" to force English regardless of client locale
                             var name = getCardTitleMethod.Invoke(cardTitleProvider,
-                                new object[] { grpId, false, null }) as string;
+                                new object[] { grpId, false, "en" }) as string;
                             if (!string.IsNullOrEmpty(name))
                             {
                                 // Strip any residual HTML tags (e.g. <nobr>Deep-Cavern</nobr>)
