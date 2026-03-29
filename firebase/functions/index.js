@@ -531,6 +531,7 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          content: "<@&1429556399473557755>",
           embeds: [{
             title: "⚔️ Planar Standard Lobby Open",
             color: 0xf5a623,
