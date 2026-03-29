@@ -23,6 +23,13 @@ namespace MTGAEnhancementSuite.UI
         private static MonoBehaviour _coroutineRunner;
         private static string _filterFormat = "all"; // "all" = show everything
 
+        // Tab system
+        private static GameObject _browserContent;
+        private static GameObject _settingsContent;
+        private static GameObject _browserTabBtn;
+        private static GameObject _settingsTabBtn;
+        private static TextMeshProUGUI _titleText;
+
         public static bool IsOpen => _isOpen;
 
         public static void Toggle()
@@ -89,19 +96,25 @@ namespace MTGAEnhancementSuite.UI
             var title = CreateChild(content.transform, "Title");
             var titleRect = title.GetComponent<RectTransform>();
             titleRect.anchorMin = new Vector2(0.05f, 0.92f);
-            titleRect.anchorMax = new Vector2(0.7f, 1f);
+            titleRect.anchorMax = new Vector2(0.5f, 1f);
             titleRect.sizeDelta = Vector2.zero;
-            var titleText = title.AddComponent<TextMeshProUGUI>();
-            titleText.text = "MTGA+ Server Browser";
-            titleText.fontSize = 28;
-            titleText.fontStyle = FontStyles.Bold;
-            titleText.alignment = TextAlignmentOptions.Left;
-            titleText.color = Color.white;
+            _titleText = title.AddComponent<TextMeshProUGUI>();
+            _titleText.text = "MTGA+";
+            _titleText.fontSize = 28;
+            _titleText.fontStyle = FontStyles.Bold;
+            _titleText.alignment = TextAlignmentOptions.Left;
+            _titleText.color = Color.white;
 
-            // Refresh button
-            var refreshBtn = CreateButton(content.transform, "Refresh", "Refresh",
-                new Vector2(0.72f, 0.93f), new Vector2(0.85f, 0.99f));
-            refreshBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() => RefreshLobbies()));
+            // Tab buttons
+            _browserTabBtn = CreateButton(content.transform, "BrowserTab", "Browser",
+                new Vector2(0.52f, 0.93f), new Vector2(0.65f, 0.99f));
+            _browserTabBtn.GetComponent<Image>().color = new Color(0.3f, 0.5f, 0.7f, 0.9f); // active
+            _browserTabBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() => SwitchTab(true)));
+
+            _settingsTabBtn = CreateButton(content.transform, "SettingsTab", "Settings",
+                new Vector2(0.66f, 0.93f), new Vector2(0.79f, 0.99f));
+            _settingsTabBtn.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.25f, 0.9f); // inactive
+            _settingsTabBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() => SwitchTab(false)));
 
             // Close button
             var closeBtn = CreateButton(content.transform, "CloseBtn", "X",
@@ -109,8 +122,20 @@ namespace MTGAEnhancementSuite.UI
             closeBtn.GetComponent<Image>().color = new Color(0.6f, 0.2f, 0.2f, 0.9f);
             closeBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(Close));
 
+            // === Browser Content ===
+            _browserContent = CreateChild(content.transform, "BrowserContent");
+            var browserRect = _browserContent.GetComponent<RectTransform>();
+            browserRect.anchorMin = Vector2.zero;
+            browserRect.anchorMax = new Vector2(1f, 0.92f);
+            browserRect.sizeDelta = Vector2.zero;
+
+            // Refresh button (inside browser content)
+            var refreshBtn = CreateButton(_browserContent.transform, "Refresh", "Refresh",
+                new Vector2(0.82f, 0.93f), new Vector2(0.95f, 0.99f));
+            refreshBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() => RefreshLobbies()));
+
             // Status text
-            var status = CreateChild(content.transform, "Status");
+            var status = CreateChild(_browserContent.transform, "Status");
             var statusRect = status.GetComponent<RectTransform>();
             statusRect.anchorMin = new Vector2(0.05f, 0.86f);
             statusRect.anchorMax = new Vector2(0.95f, 0.92f);
@@ -122,7 +147,7 @@ namespace MTGAEnhancementSuite.UI
             _statusText.alignment = TextAlignmentOptions.Left;
 
             // Format filter row
-            var filterRow = CreateChild(content.transform, "FilterRow");
+            var filterRow = CreateChild(_browserContent.transform, "FilterRow");
             var filterRowRect = filterRow.GetComponent<RectTransform>();
             filterRowRect.anchorMin = new Vector2(0.05f, 0.80f);
             filterRowRect.anchorMax = new Vector2(0.95f, 0.86f);
@@ -183,7 +208,7 @@ namespace MTGAEnhancementSuite.UI
             }));
 
             // Lobby list scroll area
-            var scrollArea = CreateChild(content.transform, "ScrollArea");
+            var scrollArea = CreateChild(_browserContent.transform, "ScrollArea");
             var scrollRect = scrollArea.GetComponent<RectTransform>();
             scrollRect.anchorMin = new Vector2(0.03f, 0.12f);
             scrollRect.anchorMax = new Vector2(0.97f, 0.79f);
@@ -221,7 +246,7 @@ namespace MTGAEnhancementSuite.UI
             _lobbyListContainer = listContent.transform;
 
             // Paste invite section (bottom)
-            var pasteSection = CreateChild(content.transform, "PasteSection");
+            var pasteSection = CreateChild(_browserContent.transform, "PasteSection");
             var pasteSectionRect = pasteSection.GetComponent<RectTransform>();
             pasteSectionRect.anchorMin = new Vector2(0.05f, 0.02f);
             pasteSectionRect.anchorMax = new Vector2(0.95f, 0.10f);
@@ -283,8 +308,157 @@ namespace MTGAEnhancementSuite.UI
                 }
             }));
 
+            // === Settings Content (hidden by default) ===
+            _settingsContent = CreateChild(content.transform, "SettingsContent");
+            var settingsRect = _settingsContent.GetComponent<RectTransform>();
+            settingsRect.anchorMin = Vector2.zero;
+            settingsRect.anchorMax = new Vector2(1f, 0.92f);
+            settingsRect.sizeDelta = Vector2.zero;
+            _settingsContent.SetActive(false);
+
+            // Settings header
+            var settingsHeader = CreateChild(_settingsContent.transform, "SettingsHeader");
+            var shRect = settingsHeader.GetComponent<RectTransform>();
+            shRect.anchorMin = new Vector2(0.05f, 0.88f);
+            shRect.anchorMax = new Vector2(0.95f, 0.98f);
+            shRect.sizeDelta = Vector2.zero;
+            var shText = settingsHeader.AddComponent<TextMeshProUGUI>();
+            shText.text = "Gameplay Settings";
+            shText.fontSize = 22;
+            shText.fontStyle = FontStyles.Bold;
+            shText.color = Color.white;
+            shText.alignment = TextAlignmentOptions.Left;
+
+            // Companion toggle
+            CreateToggle(_settingsContent.transform, "CompanionToggle",
+                "Disable Companions",
+                "Hides all pets/companions during matches — no rendering, animations, or sounds.",
+                new Vector2(0.05f, 0.72f), new Vector2(0.95f, 0.85f),
+                ModSettings.Instance.DisableCompanions,
+                (val) =>
+                {
+                    ModSettings.Instance.DisableCompanions = val;
+                    ModSettings.Instance.Save();
+                    Toast.Info(val ? "Companions disabled (takes effect next match)" : "Companions enabled (takes effect next match)");
+                });
+
+            // Card VFX toggle
+            CreateToggle(_settingsContent.transform, "CardVFXToggle",
+                "Disable Card Animations",
+                "Removes flashy ETB effects, 3D model popups, and cosmetic card animations. Basic arrival sounds are kept.",
+                new Vector2(0.05f, 0.56f), new Vector2(0.95f, 0.69f),
+                ModSettings.Instance.DisableCardVFX,
+                (val) =>
+                {
+                    ModSettings.Instance.DisableCardVFX = val;
+                    ModSettings.Instance.Save();
+                    Toast.Info(val ? "Card animations disabled" : "Card animations enabled");
+                });
+
+            // Settings note
+            var settingsNote = CreateChild(_settingsContent.transform, "SettingsNote");
+            var snRect = settingsNote.GetComponent<RectTransform>();
+            snRect.anchorMin = new Vector2(0.05f, 0.05f);
+            snRect.anchorMax = new Vector2(0.95f, 0.15f);
+            snRect.sizeDelta = Vector2.zero;
+            var snText = settingsNote.AddComponent<TextMeshProUGUI>();
+            snText.text = "Settings are saved automatically and persist across game restarts.";
+            snText.fontSize = 13;
+            snText.color = new Color(0.5f, 0.5f, 0.6f);
+            snText.fontStyle = FontStyles.Italic;
+            snText.alignment = TextAlignmentOptions.Left;
+
             _panelRoot.SetActive(false);
             PerPlayerLog.Info("Server browser panel created");
+        }
+
+        private static void SwitchTab(bool showBrowser)
+        {
+            if (_browserContent != null) _browserContent.SetActive(showBrowser);
+            if (_settingsContent != null) _settingsContent.SetActive(!showBrowser);
+
+            if (_browserTabBtn != null)
+                _browserTabBtn.GetComponent<Image>().color = showBrowser
+                    ? new Color(0.3f, 0.5f, 0.7f, 0.9f)
+                    : new Color(0.15f, 0.15f, 0.25f, 0.9f);
+
+            if (_settingsTabBtn != null)
+                _settingsTabBtn.GetComponent<Image>().color = !showBrowser
+                    ? new Color(0.3f, 0.5f, 0.7f, 0.9f)
+                    : new Color(0.15f, 0.15f, 0.25f, 0.9f);
+
+            if (showBrowser)
+                RefreshLobbies();
+        }
+
+        private static void CreateToggle(Transform parent, string name, string label, string description,
+            Vector2 anchorMin, Vector2 anchorMax, bool initialValue, Action<bool> onChanged)
+        {
+            var row = CreateChild(parent, name);
+            var rowRect = row.GetComponent<RectTransform>();
+            rowRect.anchorMin = anchorMin;
+            rowRect.anchorMax = anchorMax;
+            rowRect.sizeDelta = Vector2.zero;
+            row.AddComponent<Image>().color = new Color(0.1f, 0.1f, 0.18f, 0.8f);
+
+            // Label
+            var labelObj = CreateChild(row.transform, "Label");
+            var labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0.12f, 0.5f);
+            labelRect.anchorMax = new Vector2(0.95f, 1f);
+            labelRect.sizeDelta = Vector2.zero;
+            var labelTmp = labelObj.AddComponent<TextMeshProUGUI>();
+            labelTmp.text = label;
+            labelTmp.fontSize = 18;
+            labelTmp.fontStyle = FontStyles.Bold;
+            labelTmp.color = Color.white;
+            labelTmp.alignment = TextAlignmentOptions.Left;
+
+            // Description
+            var descObj = CreateChild(row.transform, "Desc");
+            var descRect = descObj.GetComponent<RectTransform>();
+            descRect.anchorMin = new Vector2(0.12f, 0f);
+            descRect.anchorMax = new Vector2(0.95f, 0.5f);
+            descRect.sizeDelta = Vector2.zero;
+            var descTmp = descObj.AddComponent<TextMeshProUGUI>();
+            descTmp.text = description;
+            descTmp.fontSize = 13;
+            descTmp.color = new Color(0.6f, 0.6f, 0.7f);
+            descTmp.alignment = TextAlignmentOptions.Left;
+
+            // Toggle button (checkbox-style)
+            var toggleObj = CreateChild(row.transform, "ToggleBtn");
+            var toggleRect = toggleObj.GetComponent<RectTransform>();
+            toggleRect.anchorMin = new Vector2(0.02f, 0.25f);
+            toggleRect.anchorMax = new Vector2(0.09f, 0.75f);
+            toggleRect.sizeDelta = Vector2.zero;
+            var toggleBg = toggleObj.AddComponent<Image>();
+            toggleBg.color = initialValue
+                ? new Color(0.2f, 0.6f, 0.3f, 0.9f)
+                : new Color(0.3f, 0.15f, 0.15f, 0.9f);
+
+            var checkObj = CreateChild(toggleObj.transform, "Check");
+            StretchFull(checkObj);
+            var checkTmp = checkObj.AddComponent<TextMeshProUGUI>();
+            checkTmp.text = initialValue ? "ON" : "OFF";
+            checkTmp.fontSize = 14;
+            checkTmp.fontStyle = FontStyles.Bold;
+            checkTmp.color = Color.white;
+            checkTmp.alignment = TextAlignmentOptions.Center;
+
+            var btn = toggleObj.AddComponent<Button>();
+            var capturedBg = toggleBg;
+            var capturedCheck = checkTmp;
+            bool currentValue = initialValue;
+            btn.onClick.AddListener(new UnityAction(() =>
+            {
+                currentValue = !currentValue;
+                capturedBg.color = currentValue
+                    ? new Color(0.2f, 0.6f, 0.3f, 0.9f)
+                    : new Color(0.3f, 0.15f, 0.15f, 0.9f);
+                capturedCheck.text = currentValue ? "ON" : "OFF";
+                onChanged?.Invoke(currentValue);
+            }));
         }
 
         public static void RefreshLobbies()

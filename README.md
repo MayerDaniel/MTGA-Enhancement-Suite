@@ -37,24 +37,31 @@ This will:
 ## Features
 
 ### Custom Format Lobbies
-Create challenge lobbies with format rules (currently **Pauper** and **Planar Standard** ). When a player selects a deck, it is validated against the format's legal card list — illegal decks are rejected with a message showing which cards aren't allowed. Format rules are synced between host and joiner in real-time via Firebase, and backed by scryfall.
+Create challenge lobbies with format rules (currently **Pauper (Paper Banlist)**, **Historic Pauper**, **Standard Pauper**, **Planar Standard**, and **Modern**). When a player selects a deck, it is validated against the format's legal card list — illegal decks are rejected with a message showing which cards aren't allowed. Format rules are synced between host and joiner in real-time via Firebase, and backed by Scryfall.
 
 ### Lobby Invite Links
 Share a clickable `https://` link to your lobby. The recipient's browser opens a landing page that launches MTGA and joins the lobby automatically — no friend request needed. If MTGA is already running, the link is forwarded to the existing instance.
 
 ### Public Lobby Browser
-Mark your lobby as public and it appears in a server browser visible to all Enhancement Suite users. Browse open lobbies, see the host name and format, and join with one click.
+Mark your lobby as public and it appears in a server browser visible to all Enhancement Suite users. Browse open lobbies, filter by format, see the host name and Bo1/Bo3 setting, and join with one click.
 
 ### Format Sync Across Matches
 When a lobby host changes the format, the joiner's client updates automatically. Format settings persist across rematches — play multiple games in the same lobby without re-configuring.
 
+### Gameplay Settings
+Click the **MTGA+** button and switch to the **Settings** tab to access:
+- **Disable Companions** — Hides all pets/companions during matches. No rendering, animations, or sounds.
+- **Disable Card Animations** — Removes flashy ETB effects, 3D model popups, and cosmetic card animations. Basic arrival sounds and card draw trajectories are preserved.
+
+Settings are saved automatically and persist across game restarts.
+
 ## Usage
 
 1. Launch MTGA — you should see an **MTGA+** button in the top navigation bar
-2. Create a challenge lobby (Play > Challenge)
+2. Open your **Friends List** and click the **Challenge** button in the top right
 3. Use the **format selector** below the coin flip spinner to choose a format
 4. Click **Copy Link** to get a shareable invite, or **Make Public** to list in the server browser
-5. Click the **MTGA+** button to browse public lobbies
+5. Click the **MTGA+** button to browse public lobbies or access settings
 
 ## Uninstalling
 
