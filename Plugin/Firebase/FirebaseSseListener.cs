@@ -86,7 +86,6 @@ namespace MTGAEnhancementSuite.Firebase
             try
             {
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-                ServicePointManager.ServerCertificateValidationCallback = AcceptAllCerts;
             }
             catch (Exception ex)
             {
@@ -209,10 +208,5 @@ namespace MTGAEnhancementSuite.Firebase
             }
         }
 
-        private static bool AcceptAllCerts(object sender, X509Certificate certificate,
-            X509Chain chain, SslPolicyErrors sslPolicyErrors)
-        {
-            return true;
-        }
     }
 }
