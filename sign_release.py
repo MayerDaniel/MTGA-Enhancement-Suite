@@ -69,25 +69,30 @@ def main():
         print("ERROR: No release files found")
         sys.exit(1)
 
-    # Build the manifest content to sign (deterministic JSON, no signature field)
-    manifest_content = {
-        "version": args.version,
-        "files": files,
-    }
-    # Canonical JSON for signing (sorted keys, no extra whitespace)
-    content_to_sign = json.dumps(manifest_content, sort_keys=True, separators=(",", ":"))
+    # Build the content to sign — must match what C#'s JObject produces:
+    # {"files":{...in RELEASE_FILES order...},"version":"..."}
+    # C# does: new JObject { ["files"] = manifest["files"], ["version"] = manifest["version"] }
+    # JObject preserves insertion order, and ToString(Formatting.None) uses no whitespace.
+    # We use an OrderedDict to guarantee files first, version second, with file keys
+    # in RELEASE_FILES order (same order they appear in the manifest JSON).
+    from collections import OrderedDict
+    manifest_content = OrderedDict([
+        ("files", OrderedDict((k, files[k]) for k in files)),
+        ("version", args.version),
+    ])
+    content_to_sign = json.dumps(manifest_content, separators=(",", ":"))
 
     # Sign
     private_key = load_private_key(args.key)
     signature = private_key.sign(content_to_sign.encode("utf-8"))
     signature_b64 = base64.b64encode(signature).decode("utf-8")
 
-    # Write final manifest with signature
-    manifest = {
-        "version": args.version,
-        "files": files,
-        "signature": signature_b64,
-    }
+    # Write final manifest with signature — files key order matches RELEASE_FILES
+    manifest = OrderedDict([
+        ("files", OrderedDict((k, files[k]) for k in files)),
+        ("version", args.version),
+        ("signature", signature_b64),
+    ])
     manifest_path = os.path.join(RELEASE_DIR, "manifest.json")
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)

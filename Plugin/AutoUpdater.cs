@@ -279,13 +279,13 @@ namespace MTGAEnhancementSuite
                     return false;
                 }
 
-                // Reconstruct the signed content (version + files, no signature field)
+                // Reconstruct the signed content (files + version, no signature field)
+                // JObject preserves insertion order — files first, version second
                 var contentObj = new JObject
                 {
                     ["files"] = manifest["files"],
                     ["version"] = manifest["version"]
                 };
-                // Canonical JSON: sorted keys, no whitespace (matches Python's separators=(",",":"))
                 var contentToVerify = contentObj.ToString(Newtonsoft.Json.Formatting.None);
 
                 var signatureBytes = Convert.FromBase64String(signatureB64);
