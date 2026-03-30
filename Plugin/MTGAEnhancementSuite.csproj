@@ -73,6 +73,10 @@
       <HintPath>C:\Program Files\Wizards of the Coast\MTGA\MTGA_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="BouncyCastle.Crypto">
+      <HintPath>C:\Program Files\Wizards of the Coast\MTGA\MTGA_Data\Managed\BouncyCastle.Crypto.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.AudioModule">
       <HintPath>C:\Program Files\Wizards of the Coast\MTGA\MTGA_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>

@@ -127,6 +127,7 @@ try {
     $dllAsset = $release.assets | Where-Object { $_.name -eq "MTGAEnhancementSuite.dll" }
     $configAsset = $release.assets | Where-Object { $_.name -eq "config.json" }
     $bootstrapperAsset = $release.assets | Where-Object { $_.name -eq "MTGAESBootstrapper.dll" }
+    $manifestAsset = $release.assets | Where-Object { $_.name -eq "manifest.json" }
 
     if (-not $dllAsset) {
         Write-Host "No MTGAEnhancementSuite.dll found in latest release. Aborting." -ForegroundColor Red
@@ -142,10 +143,48 @@ if (-not (Test-Path $pluginPath)) {
     New-Item -ItemType Directory -Path $pluginPath -Force | Out-Null
 }
 
+# Download manifest and verify signature if available
+$manifest = $null
+if ($manifestAsset) {
+    Write-Host "  Downloading manifest..."
+    $manifestPath = Join-Path $env:TEMP "mtgaes_manifest.json"
+    Invoke-WebRequest -Uri $manifestAsset.browser_download_url -OutFile $manifestPath -UseBasicParsing
+    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    Write-Host "  Manifest downloaded (v$($manifest.version))." -ForegroundColor Green
+} else {
+    Write-Host "  No manifest.json in release — skipping integrity verification." -ForegroundColor Yellow
+}
+
+function Get-FileSHA256($path) {
+    $hash = Get-FileHash -Path $path -Algorithm SHA256
+    return $hash.Hash.ToLower()
+}
+
+function Test-FileHash($path, $expectedHash) {
+    if (-not $expectedHash) { return $true }
+    $actual = Get-FileSHA256 $path
+    if ($actual -ne $expectedHash.ToLower()) {
+        Write-Host "  HASH MISMATCH for $(Split-Path $path -Leaf)!" -ForegroundColor Red
+        Write-Host "    Expected: $expectedHash" -ForegroundColor Red
+        Write-Host "    Got:      $actual" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
 # Download DLL
 $dllPath = Join-Path $pluginPath "MTGAEnhancementSuite.dll"
 Write-Host "  Downloading plugin DLL..."
 Invoke-WebRequest -Uri $dllAsset.browser_download_url -OutFile $dllPath -UseBasicParsing
+if ($manifest) {
+    $expectedHash = $manifest.files.'MTGAEnhancementSuite.dll'
+    if (-not (Test-FileHash $dllPath $expectedHash)) {
+        Remove-Item $dllPath -Force -ErrorAction SilentlyContinue
+        Write-Host "DLL integrity check failed. Aborting." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  DLL hash verified." -ForegroundColor Green
+}
 Write-Host "  Plugin DLL installed." -ForegroundColor Green
 
 # Download config.json if available and not already present
@@ -153,6 +192,15 @@ $configPath = Join-Path $pluginPath "config.json"
 if ($configAsset -and -not (Test-Path $configPath)) {
     Write-Host "  Downloading config.json..."
     Invoke-WebRequest -Uri $configAsset.browser_download_url -OutFile $configPath -UseBasicParsing
+    if ($manifest) {
+        $expectedHash = $manifest.files.'config.json'
+        if (-not (Test-FileHash $configPath $expectedHash)) {
+            Remove-Item $configPath -Force -ErrorAction SilentlyContinue
+            Write-Host "Config integrity check failed. Aborting." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "  Config hash verified." -ForegroundColor Green
+    }
     Write-Host "  Config installed." -ForegroundColor Green
 } elseif (Test-Path $configPath) {
     Write-Host "  Config already exists, skipping." -ForegroundColor Green
@@ -163,6 +211,15 @@ if ($bootstrapperAsset) {
     $bootstrapperPath = Join-Path $pluginPath "MTGAESBootstrapper.dll"
     Write-Host "  Downloading bootstrapper..."
     Invoke-WebRequest -Uri $bootstrapperAsset.browser_download_url -OutFile $bootstrapperPath -UseBasicParsing
+    if ($manifest) {
+        $expectedHash = $manifest.files.'MTGAESBootstrapper.dll'
+        if (-not (Test-FileHash $bootstrapperPath $expectedHash)) {
+            Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
+            Write-Host "Bootstrapper integrity check failed. Aborting." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "  Bootstrapper hash verified." -ForegroundColor Green
+    }
     Write-Host "  Bootstrapper installed." -ForegroundColor Green
 }
 

@@ -2,20 +2,28 @@ using System;
 using System.Collections;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using MTGAEnhancementSuite.UI;
 using Newtonsoft.Json.Linq;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Crypto.Signers;
 using UnityEngine;
 
 namespace MTGAEnhancementSuite
 {
     /// <summary>
-    /// Checks GitHub for a newer release on startup and stages the update
-    /// for the bootstrapper to apply on next launch.
+    /// Checks GitHub for a newer release on startup, verifies the release
+    /// manifest signature (Ed25519) and file hashes (SHA-256) before staging
+    /// the update for the bootstrapper to apply on next launch.
     /// </summary>
     internal static class AutoUpdater
     {
         private const string GitHubApiUrl = "https://api.github.com/repos/MayerDaniel/MTGA-Enhancement-Suite/releases/latest";
         private static readonly Version CurrentVersion = new Version(PluginInfo.VERSION);
+
+        // Ed25519 public key for verifying release signatures (base64-encoded raw 32 bytes)
+        private const string PublicKeyBase64 = "hzrpXE+qhCu3qoNpkPGnvtvoqKZb9vusP0wuOrWvlWQ=";
 
         public static IEnumerator CheckForUpdate()
         {
@@ -50,7 +58,6 @@ namespace MTGAEnhancementSuite
             thread.IsBackground = true;
             thread.Start();
 
-            // Wait for thread to finish
             while (thread.IsAlive)
                 yield return new WaitForSeconds(0.5f);
 
@@ -85,7 +92,6 @@ namespace MTGAEnhancementSuite
                 yield break;
             }
 
-            // Parse version from tag (strip leading 'v' if present)
             var versionStr = tagName.TrimStart('v');
             Version remoteVersion;
             if (!Version.TryParse(versionStr, out remoteVersion))
@@ -102,7 +108,7 @@ namespace MTGAEnhancementSuite
                 yield break;
             }
 
-            // Find the DLL and config.json assets
+            // Find asset URLs
             var assets = release["assets"] as JArray;
             if (assets == null || assets.Count == 0)
             {
@@ -112,15 +118,17 @@ namespace MTGAEnhancementSuite
 
             string dllUrl = null;
             string configUrl = null;
+            string bootstrapperUrl = null;
+            string manifestUrl = null;
 
             foreach (var asset in assets)
             {
                 var name = asset["name"]?.ToString();
                 var url = asset["browser_download_url"]?.ToString();
-                if (name == "MTGAEnhancementSuite.dll")
-                    dllUrl = url;
-                else if (name == "config.json")
-                    configUrl = url;
+                if (name == "MTGAEnhancementSuite.dll") dllUrl = url;
+                else if (name == "config.json") configUrl = url;
+                else if (name == "MTGAESBootstrapper.dll") bootstrapperUrl = url;
+                else if (name == "manifest.json") manifestUrl = url;
             }
 
             if (dllUrl == null)
@@ -129,16 +137,15 @@ namespace MTGAEnhancementSuite
                 yield break;
             }
 
-            // Stage the update
             Toast.Info($"MTGA+ update available: v{remoteVersion}. Downloading...");
-            Plugin.Log.LogInfo($"AutoUpdater: Downloading update from {dllUrl}");
+            Plugin.Log.LogInfo($"AutoUpdater: Downloading update v{remoteVersion}");
 
             var pluginDir = Path.GetDirectoryName(
                 System.Reflection.Assembly.GetExecutingAssembly().Location);
             var updateDir = Path.Combine(pluginDir, "update");
 
             bool downloadSuccess = false;
-            Exception downloadError = null;
+            string downloadFailReason = null;
 
             var dlThread = new System.Threading.Thread(() =>
             {
@@ -147,22 +154,95 @@ namespace MTGAEnhancementSuite
                     if (!Directory.Exists(updateDir))
                         Directory.CreateDirectory(updateDir);
 
-                    // Download DLL to staging
+                    // Download manifest first (if available)
+                    JObject manifest = null;
+                    if (manifestUrl != null)
+                    {
+                        var manifestPath = Path.Combine(updateDir, "manifest.json");
+                        DownloadFile(manifestUrl, manifestPath);
+                        var manifestJson = File.ReadAllText(manifestPath);
+                        manifest = JObject.Parse(manifestJson);
+
+                        // Verify signature
+                        if (!VerifyManifestSignature(manifest))
+                        {
+                            downloadFailReason = "Manifest signature verification FAILED — update rejected";
+                            return;
+                        }
+                        Plugin.Log.LogInfo("AutoUpdater: Manifest signature verified");
+                    }
+                    else
+                    {
+                        Plugin.Log.LogWarning("AutoUpdater: No manifest.json in release — skipping signature check");
+                    }
+
+                    // Download DLL
                     var dllPath = Path.Combine(updateDir, "MTGAEnhancementSuite.dll.pending");
                     DownloadFile(dllUrl, dllPath);
 
-                    // Download config.json directly (not locked, can overwrite)
+                    // Verify DLL hash against manifest
+                    if (manifest != null)
+                    {
+                        var expectedHash = manifest["files"]?["MTGAEnhancementSuite.dll"]?.ToString();
+                        if (expectedHash != null && !VerifyFileHash(dllPath, expectedHash))
+                        {
+                            downloadFailReason = "DLL hash mismatch — update rejected";
+                            File.Delete(dllPath);
+                            return;
+                        }
+                        Plugin.Log.LogInfo("AutoUpdater: DLL hash verified");
+                    }
+
+                    // Download config.json (not locked, overwrite directly)
                     if (configUrl != null)
                     {
-                        var configPath = Path.Combine(pluginDir, "config.json");
-                        DownloadFile(configUrl, configPath);
+                        var configTempPath = Path.Combine(updateDir, "config.json.tmp");
+                        DownloadFile(configUrl, configTempPath);
+
+                        if (manifest != null)
+                        {
+                            var expectedHash = manifest["files"]?["config.json"]?.ToString();
+                            if (expectedHash != null && !VerifyFileHash(configTempPath, expectedHash))
+                            {
+                                downloadFailReason = "config.json hash mismatch — update rejected";
+                                File.Delete(dllPath);
+                                File.Delete(configTempPath);
+                                return;
+                            }
+                            Plugin.Log.LogInfo("AutoUpdater: config.json hash verified");
+                        }
+
+                        // Move to final location
+                        var configFinalPath = Path.Combine(pluginDir, "config.json");
+                        File.Copy(configTempPath, configFinalPath, true);
+                        File.Delete(configTempPath);
+                    }
+
+                    // Download bootstrapper (if available)
+                    if (bootstrapperUrl != null)
+                    {
+                        var bsPath = Path.Combine(updateDir, "MTGAESBootstrapper.dll.pending");
+                        DownloadFile(bootstrapperUrl, bsPath);
+
+                        if (manifest != null)
+                        {
+                            var expectedHash = manifest["files"]?["MTGAESBootstrapper.dll"]?.ToString();
+                            if (expectedHash != null && !VerifyFileHash(bsPath, expectedHash))
+                            {
+                                downloadFailReason = "Bootstrapper hash mismatch — update rejected";
+                                File.Delete(dllPath);
+                                File.Delete(bsPath);
+                                return;
+                            }
+                            Plugin.Log.LogInfo("AutoUpdater: Bootstrapper hash verified");
+                        }
                     }
 
                     downloadSuccess = true;
                 }
                 catch (Exception ex)
                 {
-                    downloadError = ex;
+                    downloadFailReason = ex.Message;
                 }
             });
             dlThread.IsBackground = true;
@@ -180,7 +260,77 @@ namespace MTGAEnhancementSuite
             else
             {
                 Toast.Warning("Failed to download MTGA+ update.");
-                Plugin.Log.LogError($"AutoUpdater: Download failed: {downloadError?.Message}");
+                Plugin.Log.LogError($"AutoUpdater: Update failed: {downloadFailReason}");
+            }
+        }
+
+        /// <summary>
+        /// Verifies the Ed25519 signature on the manifest.
+        /// The signed content is the canonical JSON of {version, files} with sorted keys.
+        /// </summary>
+        private static bool VerifyManifestSignature(JObject manifest)
+        {
+            try
+            {
+                var signatureB64 = manifest["signature"]?.ToString();
+                if (string.IsNullOrEmpty(signatureB64))
+                {
+                    Plugin.Log.LogWarning("AutoUpdater: No signature in manifest");
+                    return false;
+                }
+
+                // Reconstruct the signed content (version + files, no signature field)
+                var contentObj = new JObject
+                {
+                    ["files"] = manifest["files"],
+                    ["version"] = manifest["version"]
+                };
+                // Canonical JSON: sorted keys, no whitespace (matches Python's separators=(",",":"))
+                var contentToVerify = contentObj.ToString(Newtonsoft.Json.Formatting.None);
+
+                var signatureBytes = Convert.FromBase64String(signatureB64);
+                var publicKeyBytes = Convert.FromBase64String(PublicKeyBase64);
+
+                var publicKeyParams = new Ed25519PublicKeyParameters(publicKeyBytes, 0);
+                var verifier = new Ed25519Signer();
+                verifier.Init(false, publicKeyParams);
+
+                var contentBytes = Encoding.UTF8.GetBytes(contentToVerify);
+                verifier.BlockUpdate(contentBytes, 0, contentBytes.Length);
+
+                return verifier.VerifySignature(signatureBytes);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogError($"AutoUpdater: Signature verification error: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Verifies a file's SHA-256 hash matches the expected value.
+        /// </summary>
+        private static bool VerifyFileHash(string filePath, string expectedHash)
+        {
+            try
+            {
+                using (var sha = SHA256.Create())
+                using (var stream = File.OpenRead(filePath))
+                {
+                    var hash = sha.ComputeHash(stream);
+                    var hashHex = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+                    if (hashHex != expectedHash.ToLowerInvariant())
+                    {
+                        Plugin.Log.LogError($"AutoUpdater: Hash mismatch for {Path.GetFileName(filePath)}: expected {expectedHash}, got {hashHex}");
+                        return false;
+                    }
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogError($"AutoUpdater: Hash check error: {ex}");
+                return false;
             }
         }
 

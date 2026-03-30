@@ -1,5 +1,7 @@
 # Environment / secrets
 .env
+signing_key.pem
+signing_key.pub
 
 # Build output
 [Bb]in/
