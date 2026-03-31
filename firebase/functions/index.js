@@ -6,6 +6,7 @@ const admin = require("firebase-admin");
 
 const discordWebhookUrl = defineSecret("DISCORD_WEBHOOK_URL");
 const discordPlanarStdWebhookUrl = defineSecret("DISCORD_WEBHOOK_PLANAR_STD");
+const discordPauperWebhookUrl = defineSecret("DISCORD_WEBHOOK_PAUPER");
 
 admin.initializeApp({
   databaseURL: "https://mtga-enhancement-suite-default-rtdb.firebaseio.com",
@@ -21,8 +22,8 @@ const SCRYFALL_DELAY_MS = 100; // Scryfall asks for 50-100ms between requests
  */
 const FORMAT_REGISTRY = {
   pauper:             { displayName: "Pauper (Paper Banlist)", scryfallQuery: "legal:pauper" },
-  historicpauper:     { displayName: "Historic Pauper",       scryfallQuery: '(game:arena) legal:historic rarity:c -"ancestral mask" -"cranial ram" -"galvanic blast" -"persistent petitioners" -"refurbished familiar" -"sneaky snacker" -"kuldotha rebirth"', rawQuery: true },
-  standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn) rarity:c prefer:best', rawQuery: true },
+  historicpauper:     { displayName: "Historic Pauper",       scryfallQuery: '(game:arena) legal:historic -"ancestral mask" -"cranial ram" -"galvanic blast" -"persistent petitioners" -"refurbished familiar" -"sneaky snacker" -"kuldotha rebirth"', rawQuery: true, filterCommonPrints: true },
+  standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn)', rawQuery: true, filterCommonPrints: true },
   planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
   modern:             { displayName: "Modern",                scryfallQuery: "legal:modern" },
 };
@@ -52,7 +53,7 @@ exports.syncFormatsHttp = onRequest(
         return;
       }
       const meta = FORMAT_REGISTRY[singleFormat];
-      const result = await syncFormatFromScryfall(singleFormat, meta.scryfallQuery, meta.rawQuery);
+      const result = await syncFormatFromScryfall(singleFormat, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints);
       res.json(result);
     } else {
       const results = await syncAllFormats();
@@ -77,7 +78,7 @@ async function syncAllFormats() {
   const results = [];
   for (const [key, meta] of Object.entries(FORMAT_REGISTRY)) {
     try {
-      const result = await syncFormatFromScryfall(key, meta.scryfallQuery, meta.rawQuery);
+      const result = await syncFormatFromScryfall(key, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints);
       results.push(result);
     } catch (err) {
       console.error(`Failed to sync ${key}: ${err.message}`);
@@ -91,11 +92,11 @@ async function syncAllFormats() {
  * Fetches all cards legal in a format that exist on Arena from Scryfall,
  * then writes the arena_id -> card name mapping to Firebase.
  */
-async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
+async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCommonPrints) {
   const query = scryfallQuery || `legal:${format}`;
   // rawQuery means the query already includes game: filter — don't append game:arena
   const fullQuery = rawQuery ? query : `${query} game:arena`;
-  console.log(`Starting ${format} sync from Scryfall (query: ${fullQuery})...`);
+  console.log(`Starting ${format} sync from Scryfall (query: ${fullQuery}, filterCommon: ${!!filterCommonPrints})...`);
 
   // Dual storage: arena_ids for language-independent checks,
   // names as fallback for cards without arena_ids (e.g. om1 crossover cards)
@@ -106,9 +107,18 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
   let totalFetched = 0;
   let arenaIdCount = 0;
 
-  // First pass: unique=cards to get canonical card names
+  // When filterCommonPrints is true, we fetch all prints and only include
+  // cards that have at least one common printing. This handles cards like
+  // Cultivate that have both common and uncommon printings on Arena.
+  const uniqueMode = filterCommonPrints ? "prints" : "cards";
+  // Track which card names have a common printing (for filterCommonPrints)
+  const namesWithCommonPrint = new Set();
+  // Buffer all cards by name so we can filter after the full fetch
+  const cardsByName = {}; // name -> [card, card, ...]
+
+  // First pass
   while (hasMore) {
-    const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=cards&format=json&page=${page}`;
+    const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=${uniqueMode}&format=json&page=${page}`;
 
     const response = await fetch(url);
 
@@ -126,43 +136,17 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
     for (const card of data.data) {
       const name = card.name.toLowerCase();
 
-      // Store arena_id if available
-      if (card.arena_id) {
-        legalArenaIds[String(card.arena_id)] = true;
-        arenaIdCount++;
-      }
-
-      // Always store names as fallback (for cards without arena_id)
-      legalNames[encodeFirebaseKey(name)] = true;
-
-      // Individual faces for DFCs/split cards
-      if (name.includes(" // ")) {
-        for (const face of name.split(" // ")) {
-          legalNames[encodeFirebaseKey(face.trim())] = true;
+      if (filterCommonPrints) {
+        // Buffer cards by name and track which have common prints
+        if (!cardsByName[name]) cardsByName[name] = [];
+        cardsByName[name].push(card);
+        if (card.rarity === "common") {
+          namesWithCommonPrint.add(name);
         }
-      }
-
-      // printed_name for IP crossover cards (om1 Marvel set etc.)
-      if (card.printed_name) {
-        const printedName = card.printed_name.toLowerCase();
-        legalNames[encodeFirebaseKey(printedName)] = true;
-        if (printedName.includes(" // ")) {
-          for (const face of printedName.split(" // ")) {
-            legalNames[encodeFirebaseKey(face.trim())] = true;
-          }
-        }
-      }
-
-      // Card faces for DFCs with separate printed_names
-      if (card.card_faces) {
-        for (const face of card.card_faces) {
-          if (face.name) {
-            legalNames[encodeFirebaseKey(face.name.toLowerCase())] = true;
-          }
-          if (face.printed_name) {
-            legalNames[encodeFirebaseKey(face.printed_name.toLowerCase())] = true;
-          }
-        }
+      } else {
+        // Original behavior: add all cards directly
+        addCardToLists(card, legalArenaIds, legalNames);
+        arenaIdCount += (card.arena_id ? 1 : 0);
       }
     }
 
@@ -174,42 +158,57 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
     await sleep(SCRYFALL_DELAY_MS);
   }
 
-  // Second pass: unique=prints to collect ALL arena_ids across all printings
-  // A card legal in pauper via one printing should match any arena printing
-  console.log(`First pass done: ${totalFetched} cards. Collecting all arena_ids from prints...`);
-  page = 1;
-  hasMore = true;
-
-  while (hasMore) {
-    const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=prints&format=json&page=${page}`;
-
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        console.log("Rate limited, waiting 1s...");
-        await sleep(1000);
-        continue;
+  // For filterCommonPrints: now process the buffered cards, only including
+  // those with at least one common printing. All printings of qualifying
+  // cards are included (so all arena_ids are captured).
+  if (filterCommonPrints) {
+    console.log(`First pass done: ${totalFetched} prints, ${namesWithCommonPrint.size} cards with common printings.`);
+    for (const [name, cards] of Object.entries(cardsByName)) {
+      if (!namesWithCommonPrint.has(name)) continue; // no common printing = skip
+      for (const card of cards) {
+        addCardToLists(card, legalArenaIds, legalNames);
+        arenaIdCount += (card.arena_id ? 1 : 0);
       }
-      // If prints query fails (e.g. too many results), just use what we have
-      console.log(`Prints query failed on page ${page}: ${response.status}, using first-pass arena_ids`);
-      break;
     }
+  }
 
-    const data = await response.json();
+  // Second pass: unique=prints to collect ALL arena_ids across all printings.
+  // Skip if we already used unique=prints in the first pass (filterCommonPrints).
+  if (!filterCommonPrints) {
+    console.log(`First pass done: ${totalFetched} cards. Collecting all arena_ids from prints...`);
+    page = 1;
+    hasMore = true;
 
-    for (const card of data.data) {
-      if (card.arena_id) {
-        if (!legalArenaIds[String(card.arena_id)]) {
-          legalArenaIds[String(card.arena_id)] = true;
-          arenaIdCount++;
+    while (hasMore) {
+      const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(fullQuery)}&unique=prints&format=json&page=${page}`;
+
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          console.log("Rate limited, waiting 1s...");
+          await sleep(1000);
+          continue;
+        }
+        console.log(`Prints query failed on page ${page}: ${response.status}, using first-pass arena_ids`);
+        break;
+      }
+
+      const data = await response.json();
+
+      for (const card of data.data) {
+        if (card.arena_id) {
+          if (!legalArenaIds[String(card.arena_id)]) {
+            legalArenaIds[String(card.arena_id)] = true;
+            arenaIdCount++;
+          }
         }
       }
-    }
 
-    hasMore = data.has_more;
-    page++;
-    await sleep(SCRYFALL_DELAY_MS);
+      hasMore = data.has_more;
+      page++;
+      await sleep(SCRYFALL_DELAY_MS);
+    }
   }
 
   console.log(`Fetched ${totalFetched} unique cards, ${arenaIdCount} arena_ids, ${Object.keys(legalNames).length} name entries`);
@@ -234,6 +233,49 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery) {
 
   console.log(`${format} sync complete:`, result);
   return result;
+}
+
+/**
+ * Adds a card's arena_id and name variants to the legal lists.
+ */
+function addCardToLists(card, legalArenaIds, legalNames) {
+  const name = card.name.toLowerCase();
+
+  if (card.arena_id) {
+    legalArenaIds[String(card.arena_id)] = true;
+  }
+
+  legalNames[encodeFirebaseKey(name)] = true;
+
+  // Individual faces for DFCs/split cards
+  if (name.includes(" // ")) {
+    for (const face of name.split(" // ")) {
+      legalNames[encodeFirebaseKey(face.trim())] = true;
+    }
+  }
+
+  // printed_name for IP crossover cards (om1 Marvel set etc.)
+  if (card.printed_name) {
+    const printedName = card.printed_name.toLowerCase();
+    legalNames[encodeFirebaseKey(printedName)] = true;
+    if (printedName.includes(" // ")) {
+      for (const face of printedName.split(" // ")) {
+        legalNames[encodeFirebaseKey(face.trim())] = true;
+      }
+    }
+  }
+
+  // Card faces for DFCs with separate printed_names
+  if (card.card_faces) {
+    for (const face of card.card_faces) {
+      if (face.name) {
+        legalNames[encodeFirebaseKey(face.name.toLowerCase())] = true;
+      }
+      if (face.printed_name) {
+        legalNames[encodeFirebaseKey(face.printed_name.toLowerCase())] = true;
+      }
+    }
+  }
 }
 
 function sleep(ms) {
@@ -554,6 +596,71 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
       }
     } catch (err) {
       console.error(`Planar Std Discord webhook error: ${err.message}`);
+    }
+  }
+);
+
+/**
+ * Sends a Discord notification to the Pauper channel
+ * when any pauper-category lobby becomes public.
+ */
+const PAUPER_FORMATS = ["pauper", "historicpauper", "standardpauper"];
+
+exports.notifyDiscordPauper = onValueWritten(
+  {
+    ref: "/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordPauperWebhookUrl],
+  },
+  async (event) => {
+    const before = event.data.before.val();
+    const after = event.data.after.val();
+
+    if (!after || !after.isPublic) return;
+    if (before && before.isPublic) return;
+    if (!PAUPER_FORMATS.includes(after.format)) return;
+
+    const lobbyId = event.params.lobbyId;
+    const host = after.hostDisplayName || "Unknown";
+    const format = after.format || "pauper";
+    const PAUPER_DISPLAY_NAMES = { pauper: "Vintage Pauper", historicpauper: "Historic Pauper", standardpauper: "Standard Pauper" };
+    const formatDisplay = PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
+    const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
+    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
+
+    const webhookUrl = discordPauperWebhookUrl.value();
+    if (!webhookUrl) {
+      console.error("DISCORD_WEBHOOK_PAUPER secret not set");
+      return;
+    }
+
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [{
+            title: "🃏 Pauper Lobby Open",
+            color: 0x8b6914,
+            fields: [
+              { name: "Host", value: host, inline: true },
+              { name: "Format", value: formatDisplay, inline: true },
+              { name: "Best Of", value: bestOf, inline: true },
+            ],
+            url: joinUrl,
+            description: `**[Click to join](${joinUrl})**`,
+            timestamp: new Date().toISOString(),
+          }],
+        }),
+      });
+
+      if (!resp.ok) {
+        console.error(`Pauper Discord webhook failed: ${resp.status} ${await resp.text()}`);
+      } else {
+        console.log(`Pauper Discord notified: ${host} hosting ${formatDisplay} (${lobbyId})`);
+      }
+    } catch (err) {
+      console.error(`Pauper Discord webhook error: ${err.message}`);
     }
   }
 );
