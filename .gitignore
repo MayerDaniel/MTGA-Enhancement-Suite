@@ -2,6 +2,8 @@
 .env
 signing_key.pem
 signing_key.pub
+**/service_account_key.json
+**/firebase-admin-key.json
 
 # Build output
 [Bb]in/

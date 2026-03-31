@@ -22,7 +22,10 @@ const SCRYFALL_DELAY_MS = 100; // Scryfall asks for 50-100ms between requests
  */
 const FORMAT_REGISTRY = {
   pauper:             { displayName: "Pauper (Paper Banlist)", scryfallQuery: "legal:pauper" },
-  historicpauper:     { displayName: "Historic Pauper",       scryfallQuery: '(game:arena) legal:historic -"ancestral mask" -"cranial ram" -"galvanic blast" -"persistent petitioners" -"refurbished familiar" -"sneaky snacker" -"kuldotha rebirth"', rawQuery: true, filterCommonPrints: true },
+  // Historic Pauper is synced via tools/sync_pauper_from_mtga.py (reads MTGA local card DB).
+  // Scryfall is missing some Arena-only common printings (e.g. Final Fantasy set).
+  // Do NOT add historicpauper back to this registry — it will overwrite the correct local data.
+  // historicpauper: { ... },
   standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn)', rawQuery: true, filterCommonPrints: true },
   planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
   modern:             { displayName: "Modern",                scryfallQuery: "legal:modern" },
@@ -48,6 +51,10 @@ exports.syncFormatsHttp = onRequest(
   async (req, res) => {
     const singleFormat = req.query.format || req.body?.format;
     if (singleFormat) {
+      if (EXTERNAL_FORMATS[singleFormat]) {
+        res.status(400).json({ error: `${singleFormat} is synced externally via tools/sync_pauper_from_mtga.py, not via Scryfall` });
+        return;
+      }
       if (!FORMAT_REGISTRY[singleFormat]) {
         res.status(400).json({ error: `Unknown format: ${singleFormat}`, available: Object.keys(FORMAT_REGISTRY) });
         return;
@@ -65,10 +72,18 @@ exports.syncFormatsHttp = onRequest(
 /**
  * Syncs all formats and writes the format list for clients.
  */
+// Formats synced externally (not via Scryfall). Still listed in the spinner.
+const EXTERNAL_FORMATS = {
+  historicpauper: { displayName: "Historic Pauper" },  // synced via tools/sync_pauper_from_mtga.py
+};
+
 async function syncAllFormats() {
   // Write the format list (clients read this to populate the spinner)
   const formatList = {};
   for (const [key, meta] of Object.entries(FORMAT_REGISTRY)) {
+    formatList[key] = { displayName: meta.displayName };
+  }
+  for (const [key, meta] of Object.entries(EXTERNAL_FORMATS)) {
     formatList[key] = { displayName: meta.displayName };
   }
   await admin.database().ref("formatList").set(formatList);
