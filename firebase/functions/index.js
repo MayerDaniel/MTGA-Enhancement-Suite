@@ -525,13 +525,7 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     }
 
     try {
-      // Send full username#number as separate message (so it's copyable on Discord)
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${hostFull}` }),
-      });
-
+      // Send embed first
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -549,6 +543,13 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
             timestamp: new Date().toISOString(),
           }],
         }),
+      });
+
+      // Then send full username#number as separate copyable message
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `${hostFull}` }),
       });
 
       if (!resp.ok) {
@@ -593,15 +594,7 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
     }
 
     try {
-      // Send @LFG-Arena tag + full username#number as separate copyable message
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: `<@&1429556399473557755> ${hostFull}`,
-        }),
-      });
-
+      // Send embed first
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -618,6 +611,15 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
             description: `**[Click to join](${joinUrl})**`,
             timestamp: new Date().toISOString(),
           }],
+        }),
+      });
+
+      // Then send @LFG-Arena tag + full username#number as separate copyable message
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `<@&1429556399473557755> ${hostFull}`,
         }),
       });
 
@@ -668,13 +670,7 @@ exports.notifyDiscordPauper = onValueWritten(
     }
 
     try {
-      // Send full username#number as separate copyable message
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${hostFull}` }),
-      });
-
+      // Send embed first
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -692,6 +688,13 @@ exports.notifyDiscordPauper = onValueWritten(
             timestamp: new Date().toISOString(),
           }],
         }),
+      });
+
+      // Then send full username#number as separate copyable message
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `${hostFull}` }),
       });
 
       if (!resp.ok) {
