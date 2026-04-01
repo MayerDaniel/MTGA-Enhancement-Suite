@@ -524,6 +524,13 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     }
 
     try {
+      // Send username as separate message (so it's copyable on Discord)
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `${host}` }),
+      });
+
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -584,11 +591,19 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
     }
 
     try {
+      // Send @LFG-Arena tag + username as separate copyable message
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `<@&1429556399473557755> ${host}`,
+        }),
+      });
+
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: "<@&1429556399473557755>",
           embeds: [{
             title: "⚔️ Planar Standard Lobby Open",
             color: 0xf5a623,
@@ -650,6 +665,13 @@ exports.notifyDiscordPauper = onValueWritten(
     }
 
     try {
+      // Send username as separate copyable message
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `${host}` }),
+      });
+
       const resp = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
