@@ -512,6 +512,7 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     const lobby = after;
     const lobbyId = event.params.lobbyId;
     const host = lobby.hostDisplayName || "Unknown";
+    const hostFull = lobby.hostFullName || host;
     const format = lobby.format || "none";
     const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
     const bestOf = lobby.isBestOf3 ? "Bo3" : "Bo1";
@@ -524,11 +525,11 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     }
 
     try {
-      // Send username as separate message (so it's copyable on Discord)
+      // Send full username#number as separate message (so it's copyable on Discord)
       await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${host}` }),
+        body: JSON.stringify({ content: `${hostFull}` }),
       });
 
       const resp = await fetch(webhookUrl, {
@@ -581,6 +582,7 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
 
     const lobbyId = event.params.lobbyId;
     const host = after.hostDisplayName || "Unknown";
+    const hostFull = after.hostFullName || host;
     const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
 
@@ -591,12 +593,12 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
     }
 
     try {
-      // Send @LFG-Arena tag + username as separate copyable message
+      // Send @LFG-Arena tag + full username#number as separate copyable message
       await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: `<@&1429556399473557755> ${host}`,
+          content: `<@&1429556399473557755> ${hostFull}`,
         }),
       });
 
@@ -652,6 +654,7 @@ exports.notifyDiscordPauper = onValueWritten(
 
     const lobbyId = event.params.lobbyId;
     const host = after.hostDisplayName || "Unknown";
+    const hostFull = after.hostFullName || host;
     const format = after.format || "pauper";
     const PAUPER_DISPLAY_NAMES = { pauper: "Vintage Pauper", historicpauper: "Historic Pauper", standardpauper: "Standard Pauper" };
     const formatDisplay = PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
@@ -665,11 +668,11 @@ exports.notifyDiscordPauper = onValueWritten(
     }
 
     try {
-      // Send username as separate copyable message
+      // Send full username#number as separate copyable message
       await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${host}` }),
+        body: JSON.stringify({ content: `${hostFull}` }),
       });
 
       const resp = await fetch(webhookUrl, {

@@ -165,6 +165,7 @@ namespace MTGAEnhancementSuite.Firebase
             {
                 ["format"] = format,
                 ["hostDisplayName"] = publicName,
+                ["hostFullName"] = hostDisplayName,
                 ["hostPlayerId"] = hostPlayerId,
                 ["matchType"] = matchType,
                 ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
