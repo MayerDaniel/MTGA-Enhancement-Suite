@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using MTGAEnhancementSuite.Firebase;
 using MTGAEnhancementSuite.Helpers;
+using MTGAEnhancementSuite.State;
 
 namespace MTGAEnhancementSuite.Patches
 {
@@ -103,6 +105,38 @@ namespace MTGAEnhancementSuite.Patches
                 {
                     PerPlayerLog.Info($"Player joined lobby {challengeId}! Bringing window to front.");
                     WindowHelper.BringToFront();
+
+                    // Delist lobby from server browser (host side)
+                    var cidStr = challengeId.ToString();
+                    FirebaseClient.Instance.SetLobbyPrivate(cidStr, success =>
+                    {
+                        if (success)
+                            PerPlayerLog.Info($"Host: lobby {cidStr} set to private after player joined");
+                        else
+                            PerPlayerLog.Warning($"Host: failed to set lobby {cidStr} to private");
+                    });
+                    FirebaseClient.Instance.StopHeartbeat();
+                }
+
+                // Player left: count went from 2 to 1 — re-publicize if it was public before
+                if (previousCount >= 2 && currentCount <= 1 && ChallengeFormatState.IsLobbyPublic)
+                {
+                    var cidStr = challengeId.ToString();
+                    PerPlayerLog.Info($"Player left lobby {cidStr}, re-publicizing...");
+
+                    FirebaseClient.Instance.PatchLobby(cidStr, "{\"isPublic\":true}", success =>
+                    {
+                        if (success)
+                        {
+                            FirebaseClient.Instance.StartHeartbeat(cidStr);
+                            PerPlayerLog.Info($"Host: lobby {cidStr} re-publicized after player left");
+                            UI.Toast.Info("Lobby is public again — waiting for opponent.");
+                        }
+                        else
+                        {
+                            PerPlayerLog.Warning($"Host: failed to re-publicize lobby {cidStr}");
+                        }
+                    });
                 }
             }
             catch (Exception ex)

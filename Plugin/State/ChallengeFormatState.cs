@@ -9,6 +9,9 @@ namespace MTGAEnhancementSuite.State
         public static Guid ActiveChallengeId = Guid.Empty;
         public static bool IsBestOf3 = false;
 
+        /// <summary>True when the lobby has been explicitly made public by the host.</summary>
+        public static bool IsLobbyPublic = false;
+
         /// <summary>True when a format is selected (not "none").</summary>
         public static bool HasFormat => SelectedFormat != "none";
 
@@ -79,6 +82,7 @@ namespace MTGAEnhancementSuite.State
             SelectedFormat = "none";
             ActiveChallengeId = Guid.Empty;
             IsBestOf3 = false;
+            IsLobbyPublic = false;
             IsJoining = false;
             IsInMatch = false;
             InLobbySession = false;

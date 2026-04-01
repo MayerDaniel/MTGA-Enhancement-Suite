@@ -59,6 +59,7 @@ namespace MTGAEnhancementSuite.Patches
                 FirebaseSseListener.Instance?.Dispose();
 
                 ChallengeFormatState.Reset();
+                ChallengeSettingsPatch._lobbyRegistered = false;
             }
             catch (Exception ex)
             {
@@ -525,6 +526,8 @@ namespace MTGAEnhancementSuite.Patches
                     {
                         if (success)
                         {
+                            ChallengeFormatState.IsLobbyPublic = true;
+                            _lobbyRegistered = true;
                             FirebaseClient.Instance.StartHeartbeat(challengeIdStr);
                             Toast.Success("Lobby is now public!");
                             Plugin.Log.LogInfo($"MakePublic succeeded for {challengeIdStr}");
@@ -549,8 +552,17 @@ namespace MTGAEnhancementSuite.Patches
         /// Register the lobby in Firebase as private if not already registered.
         /// Called from CopyLink/MakePublic to ensure the lobby exists for format pushes.
         /// </summary>
+        internal static bool _lobbyRegistered = false;
+
         private static void RegisterLobbyIfNeeded(Guid challengeId)
         {
+            // Don't re-register if already registered (would overwrite public state)
+            if (_lobbyRegistered && ChallengeFormatState.ActiveChallengeId == challengeId)
+            {
+                PerPlayerLog.Info($"Lobby {challengeId} already registered, skipping re-registration");
+                return;
+            }
+
             try
             {
                 var pantryType = AccessTools.TypeByName("Pantry");
@@ -574,6 +586,7 @@ namespace MTGAEnhancementSuite.Patches
                     {
                         if (success)
                         {
+                            _lobbyRegistered = true;
                             PerPlayerLog.Info($"Lobby {challengeId} registered (private) for format sync");
                             FirebaseClient.Instance.StartHeartbeat(challengeId.ToString());
                         }
