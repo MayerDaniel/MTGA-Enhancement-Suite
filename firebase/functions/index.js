@@ -490,10 +490,113 @@ exports.cleanStaleLobbies = onScheduleV2(
   }
 );
 
+// --- Discord Webhook Helpers ---
+
+const PAUPER_FORMATS = ["pauper", "historicpauper", "standardpauper"];
+const PAUPER_DISPLAY_NAMES = { pauper: "Vintage Pauper", historicpauper: "Historic Pauper", standardpauper: "Standard Pauper" };
+
+/**
+ * Sends a Discord webhook message with ?wait=true to get the message ID back.
+ * Returns the message ID or null on failure.
+ */
+async function sendWebhookMessage(webhookUrl, payload) {
+  const url = webhookUrl.includes("?") ? `${webhookUrl}&wait=true` : `${webhookUrl}?wait=true`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    console.error(`Webhook send failed: ${resp.status} ${await resp.text()}`);
+    return null;
+  }
+  const data = await resp.json();
+  return data.id || null;
+}
+
+/**
+ * Edits an existing Discord webhook message.
+ */
+async function editWebhookMessage(webhookUrl, messageId, payload) {
+  // Extract webhook ID and token from URL: https://discord.com/api/webhooks/{id}/{token}
+  const match = webhookUrl.match(/webhooks\/(\d+)\/([^/?]+)/);
+  if (!match) {
+    console.error("Could not parse webhook URL for editing");
+    return;
+  }
+  const editUrl = `https://discord.com/api/webhooks/${match[1]}/${match[2]}/messages/${messageId}`;
+  const resp = await fetch(editUrl, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    console.error(`Webhook edit failed: ${resp.status} ${await resp.text()}`);
+  }
+}
+
+/**
+ * Stores Discord message IDs for a lobby so they can be edited later.
+ */
+async function storeMessageIds(lobbyId, channel, embedMsgId, usernameMsgId) {
+  const updates = {};
+  if (embedMsgId) updates[`lobbies/${lobbyId}/discordMessages/${channel}/embed`] = embedMsgId;
+  if (usernameMsgId) updates[`lobbies/${lobbyId}/discordMessages/${channel}/username`] = usernameMsgId;
+  if (Object.keys(updates).length > 0) {
+    await admin.database().ref().update(updates);
+  }
+}
+
+/**
+ * Edits all tracked Discord messages for a lobby to show "Lobby Closed".
+ */
+async function expireDiscordMessages(lobbyId, lobby, secrets) {
+  const messages = lobby.discordMessages;
+  if (!messages) return;
+
+  const host = lobby.hostDisplayName || "Unknown";
+  const format = lobby.format || "none";
+
+  const webhookMap = {
+    general: secrets.general,
+    planar: secrets.planar,
+    pauper: secrets.pauper,
+  };
+
+  for (const [channel, msgIds] of Object.entries(messages)) {
+    const webhookUrl = webhookMap[channel];
+    if (!webhookUrl) continue;
+
+    try {
+      // Edit the embed message to show closed
+      if (msgIds.embed) {
+        await editWebhookMessage(webhookUrl, msgIds.embed, {
+          embeds: [{
+            title: "🚫 Lobby Closed",
+            color: 0x666666,
+            description: `~~${host}'s ${format} lobby~~ — This lobby is no longer available.`,
+            timestamp: new Date().toISOString(),
+          }],
+        });
+      }
+
+      // Edit the username message to show closed
+      if (msgIds.username) {
+        await editWebhookMessage(webhookUrl, msgIds.username, {
+          content: `~~${host}~~ — lobby closed`,
+        });
+      }
+
+      console.log(`Expired Discord messages for ${channel} channel (lobby ${lobbyId})`);
+    } catch (err) {
+      console.error(`Failed to expire ${channel} messages for lobby ${lobbyId}: ${err.message}`);
+    }
+  }
+}
+
 /**
  * Sends a Discord notification when a lobby becomes public.
- * Triggers on any write to /lobbies/{lobbyId} — only notifies
- * when isPublic transitions from false/missing to true.
+ * Tracks message IDs for later editing when the lobby closes.
  */
 exports.notifyDiscordOnPublicLobby = onValueWritten(
   {
@@ -505,9 +608,8 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     const before = event.data.before.val();
     const after = event.data.after.val();
 
-    // Only notify when isPublic transitions to true (not on every update)
     if (!after || !after.isPublic) return;
-    if (before && before.isPublic) return; // already public, skip
+    if (before && before.isPublic) return;
 
     const lobby = after;
     const lobbyId = event.params.lobbyId;
@@ -519,44 +621,30 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
 
     const webhookUrl = discordWebhookUrl.value();
-    if (!webhookUrl) {
-      console.error("DISCORD_WEBHOOK_URL secret not set");
-      return;
-    }
+    if (!webhookUrl) return;
 
     try {
-      // Send embed first
-      const resp = await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          embeds: [{
-            title: "🎮 New Public Lobby",
-            color: 0x00ff88,
-            fields: [
-              { name: "Host", value: host, inline: true },
-              { name: "Format", value: formatDisplay, inline: true },
-              { name: "Best Of", value: bestOf, inline: true },
-            ],
-            url: joinUrl,
-            description: `**[Click to join](${joinUrl})**`,
-            timestamp: new Date().toISOString(),
-          }],
-        }),
+      const embedMsgId = await sendWebhookMessage(webhookUrl, {
+        embeds: [{
+          title: "🎮 New Public Lobby",
+          color: 0x00ff88,
+          fields: [
+            { name: "Host", value: host, inline: true },
+            { name: "Format", value: formatDisplay, inline: true },
+            { name: "Best Of", value: bestOf, inline: true },
+          ],
+          url: joinUrl,
+          description: `**[Click to join](${joinUrl})**`,
+          timestamp: new Date().toISOString(),
+        }],
       });
 
-      // Then send full username#number as separate copyable message
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${hostFull}` }),
+      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+        content: `${hostFull}`,
       });
 
-      if (!resp.ok) {
-        console.error(`Discord webhook failed: ${resp.status} ${await resp.text()}`);
-      } else {
-        console.log(`Discord notified: ${host} hosting ${formatDisplay} (${lobbyId})`);
-      }
+      await storeMessageIds(lobbyId, "general", embedMsgId, usernameMsgId);
+      console.log(`Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
     } catch (err) {
       console.error(`Discord webhook error: ${err.message}`);
     }
@@ -564,8 +652,7 @@ exports.notifyDiscordOnPublicLobby = onValueWritten(
 );
 
 /**
- * Sends a Discord notification to the Planar Standard channel
- * ONLY when a Planar Standard lobby becomes public.
+ * Sends a Discord notification to the Planar Standard channel.
  */
 exports.notifyDiscordPlanarStandard = onValueWritten(
   {
@@ -588,46 +675,30 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
 
     const webhookUrl = discordPlanarStdWebhookUrl.value();
-    if (!webhookUrl) {
-      console.error("DISCORD_WEBHOOK_PLANAR_STD secret not set");
-      return;
-    }
+    if (!webhookUrl) return;
 
     try {
-      // Send embed first
-      const resp = await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          embeds: [{
-            title: "⚔️ Planar Standard Lobby Open",
-            color: 0xf5a623,
-            fields: [
-              { name: "Host", value: host, inline: true },
-              { name: "Format", value: "Planar Standard", inline: true },
-              { name: "Best Of", value: bestOf, inline: true },
-            ],
-            url: joinUrl,
-            description: `**[Click to join](${joinUrl})**`,
-            timestamp: new Date().toISOString(),
-          }],
-        }),
+      const embedMsgId = await sendWebhookMessage(webhookUrl, {
+        embeds: [{
+          title: "⚔️ Planar Standard Lobby Open",
+          color: 0xf5a623,
+          fields: [
+            { name: "Host", value: host, inline: true },
+            { name: "Format", value: "Planar Standard", inline: true },
+            { name: "Best Of", value: bestOf, inline: true },
+          ],
+          url: joinUrl,
+          description: `**[Click to join](${joinUrl})**`,
+          timestamp: new Date().toISOString(),
+        }],
       });
 
-      // Then send @LFG-Arena tag + full username#number as separate copyable message
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: `<@&1429556399473557755> ${hostFull}`,
-        }),
+      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+        content: `<@&1429556399473557755> ${hostFull}`,
       });
 
-      if (!resp.ok) {
-        console.error(`Planar Std Discord webhook failed: ${resp.status} ${await resp.text()}`);
-      } else {
-        console.log(`Planar Std Discord notified: ${host} (${lobbyId})`);
-      }
+      await storeMessageIds(lobbyId, "planar", embedMsgId, usernameMsgId);
+      console.log(`Planar Std Discord notified: ${host} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
     } catch (err) {
       console.error(`Planar Std Discord webhook error: ${err.message}`);
     }
@@ -635,11 +706,8 @@ exports.notifyDiscordPlanarStandard = onValueWritten(
 );
 
 /**
- * Sends a Discord notification to the Pauper channel
- * when any pauper-category lobby becomes public.
+ * Sends a Discord notification to the Pauper channel.
  */
-const PAUPER_FORMATS = ["pauper", "historicpauper", "standardpauper"];
-
 exports.notifyDiscordPauper = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
@@ -658,52 +726,71 @@ exports.notifyDiscordPauper = onValueWritten(
     const host = after.hostDisplayName || "Unknown";
     const hostFull = after.hostFullName || host;
     const format = after.format || "pauper";
-    const PAUPER_DISPLAY_NAMES = { pauper: "Vintage Pauper", historicpauper: "Historic Pauper", standardpauper: "Standard Pauper" };
     const formatDisplay = PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
     const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
     const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
 
     const webhookUrl = discordPauperWebhookUrl.value();
-    if (!webhookUrl) {
-      console.error("DISCORD_WEBHOOK_PAUPER secret not set");
-      return;
-    }
+    if (!webhookUrl) return;
 
     try {
-      // Send embed first
-      const resp = await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          embeds: [{
-            title: "🃏 Pauper Lobby Open",
-            color: 0x8b6914,
-            fields: [
-              { name: "Host", value: host, inline: true },
-              { name: "Format", value: formatDisplay, inline: true },
-              { name: "Best Of", value: bestOf, inline: true },
-            ],
-            url: joinUrl,
-            description: `**[Click to join](${joinUrl})**`,
-            timestamp: new Date().toISOString(),
-          }],
-        }),
+      const embedMsgId = await sendWebhookMessage(webhookUrl, {
+        embeds: [{
+          title: "🃏 Pauper Lobby Open",
+          color: 0x8b6914,
+          fields: [
+            { name: "Host", value: host, inline: true },
+            { name: "Format", value: formatDisplay, inline: true },
+            { name: "Best Of", value: bestOf, inline: true },
+          ],
+          url: joinUrl,
+          description: `**[Click to join](${joinUrl})**`,
+          timestamp: new Date().toISOString(),
+        }],
       });
 
-      // Then send full username#number as separate copyable message
-      await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `${hostFull}` }),
+      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+        content: `${hostFull}`,
       });
 
-      if (!resp.ok) {
-        console.error(`Pauper Discord webhook failed: ${resp.status} ${await resp.text()}`);
-      } else {
-        console.log(`Pauper Discord notified: ${host} hosting ${formatDisplay} (${lobbyId})`);
-      }
+      await storeMessageIds(lobbyId, "pauper", embedMsgId, usernameMsgId);
+      console.log(`Pauper Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
     } catch (err) {
       console.error(`Pauper Discord webhook error: ${err.message}`);
     }
+  }
+);
+
+/**
+ * Expires Discord messages when a lobby is deleted or set to private.
+ * Fires on any write to /lobbies/{lobbyId}.
+ */
+exports.expireDiscordOnLobbyClose = onValueWritten(
+  {
+    ref: "/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl],
+  },
+  async (event) => {
+    const before = event.data.before.val();
+    const after = event.data.after.val();
+
+    // Only act when lobby transitions from existing/public to deleted or private
+    if (!before) return; // new lobby, not a close
+    if (!before.discordMessages) return; // no tracked messages
+
+    const lobbyDeleted = !after;
+    const lobbyWentPrivate = after && !after.isPublic && before.isPublic;
+
+    if (!lobbyDeleted && !lobbyWentPrivate) return;
+
+    const lobbyId = event.params.lobbyId;
+    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages`);
+
+    await expireDiscordMessages(lobbyId, before, {
+      general: discordWebhookUrl.value(),
+      planar: discordPlanarStdWebhookUrl.value(),
+      pauper: discordPauperWebhookUrl.value(),
+    });
   }
 );
