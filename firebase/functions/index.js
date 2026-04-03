@@ -592,6 +592,19 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
       console.error(`Failed to expire ${channel} messages for lobby ${lobbyId}: ${err.message}`);
     }
   }
+
+  // Clean up discordMessages from Firebase so they don't get re-expired
+  try {
+    const ref = admin.database().ref(`lobbies/${lobbyId}/discordMessages`);
+    const snap = await ref.once("value");
+    if (snap.exists()) {
+      await ref.remove();
+      console.log(`Cleaned up discordMessages for lobby ${lobbyId}`);
+    }
+  } catch (err) {
+    // Lobby may already be deleted, that's fine
+    console.log(`Could not clean discordMessages for ${lobbyId} (may already be deleted): ${err.message}`);
+  }
 }
 
 /**
@@ -775,19 +788,27 @@ exports.expireDiscordOnLobbyClose = onValueWritten(
     const before = event.data.before.val();
     const after = event.data.after.val();
 
-    // Only act when lobby transitions from existing/public to deleted or private
-    if (!before) return; // new lobby, not a close
-    if (!before.discordMessages) return; // no tracked messages
+    // Check both before and after for discordMessages (after has them on re-publicize)
+    const lobbyData = before || {};
+    const afterData = after || {};
+
+    // Get discordMessages from whichever has them
+    const discordMessages = lobbyData.discordMessages || afterData.discordMessages;
+    if (!discordMessages) return; // no tracked messages anywhere
 
     const lobbyDeleted = !after;
-    const lobbyWentPrivate = after && !after.isPublic && before.isPublic;
+    const lobbyWentPrivate = after && !after.isPublic && (before && before.isPublic);
 
     if (!lobbyDeleted && !lobbyWentPrivate) return;
 
     const lobbyId = event.params.lobbyId;
-    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages`);
+    const messageChannels = Object.keys(discordMessages);
+    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages for channels: ${messageChannels.join(", ")}`);
 
-    await expireDiscordMessages(lobbyId, before, {
+    // Use lobby data from whichever side has it for display info
+    const displayLobby = { ...lobbyData, ...afterData, discordMessages };
+
+    await expireDiscordMessages(lobbyId, displayLobby, {
       general: discordWebhookUrl.value(),
       planar: discordPlanarStdWebhookUrl.value(),
       pauper: discordPauperWebhookUrl.value(),
