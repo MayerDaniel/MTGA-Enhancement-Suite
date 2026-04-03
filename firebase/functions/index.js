@@ -574,7 +574,7 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
           embeds: [{
             title: "🚫 Lobby Closed",
             color: 0x666666,
-            description: `~~${host}'s ${format} lobby~~ — This lobby is no longer available.`,
+            description: `~~${host}'s ${format} lobby~~ — This lobby is no longer available.\n\n[Learn more about MTGA+](https://github.com/MayerDaniel/MTGA-Enhancement-Suite)`,
             timestamp: new Date().toISOString(),
           }],
         });
