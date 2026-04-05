@@ -10,5 +10,6 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <AssemblyName>MTGAPlus-Installer</AssemblyName>
     <RootNamespace>MTGAESInstaller</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
