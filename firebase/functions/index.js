@@ -460,6 +460,103 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
 });
 
 /**
+ * Lists public lobbies for the web lobby browser.
+ * Returns only active, public lobbies with fresh heartbeats.
+ */
+exports.listPublicLobbies = onRequest({ cors: true }, async (req, res) => {
+  const now = Math.floor(Date.now() / 1000);
+  const staleThreshold = now - 120; // 2 minutes
+
+  const lobbiesSnap = await admin.database().ref("lobbies").once("value");
+  if (!lobbiesSnap.exists()) {
+    res.json({ lobbies: [] });
+    return;
+  }
+
+  const lobbies = lobbiesSnap.val();
+  const result = [];
+
+  for (const [id, lobby] of Object.entries(lobbies)) {
+    if (!lobby.isPublic) continue;
+    const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
+    if (lastHeartbeat < staleThreshold) continue;
+
+    result.push({
+      id,
+      host: lobby.hostDisplayName || "Unknown",
+      format: lobby.format || "none",
+      isBestOf3: lobby.isBestOf3 || false,
+      createdAt: lobby.createdAt || 0,
+    });
+  }
+
+  res.json({ lobbies: result });
+});
+
+/**
+ * Accepts a join request from a non-mod user on the web page.
+ * Writes to /lobbies/{challengeId}/joinRequests/{pushId} so the
+ * host's SSE listener can pick it up and send an in-game invite.
+ */
+exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const { challengeId, username } = req.body;
+
+  if (!challengeId || !username) {
+    res.status(400).json({ error: "Missing challengeId or username" });
+    return;
+  }
+
+  // Validate username format: Name#12345
+  if (!/^.+#\d+$/.test(username)) {
+    res.status(400).json({ error: "Invalid username format. Use Name#12345" });
+    return;
+  }
+
+  // Check lobby exists and is open
+  const lobbySnap = await admin.database().ref(`lobbies/${challengeId}`).once("value");
+  if (!lobbySnap.exists()) {
+    res.status(404).json({ error: "Lobby not found or no longer available" });
+    return;
+  }
+
+  const lobby = lobbySnap.val();
+  if (lobby.status !== "open") {
+    res.status(404).json({ error: "Lobby is no longer available" });
+    return;
+  }
+
+  // Check for duplicate pending request from same username
+  const existingSnap = await admin.database().ref(`lobbies/${challengeId}/joinRequests`)
+    .orderByChild("username").equalTo(username).once("value");
+
+  if (existingSnap.exists()) {
+    const existing = existingSnap.val();
+    for (const [key, req] of Object.entries(existing)) {
+      if (req.status === "pending") {
+        res.json({ success: true, requestId: key, message: "Request already pending" });
+        return;
+      }
+    }
+  }
+
+  // Write join request
+  const ref = admin.database().ref(`lobbies/${challengeId}/joinRequests`).push();
+  await ref.set({
+    username: username,
+    timestamp: admin.database.ServerValue.TIMESTAMP,
+    status: "pending",
+  });
+
+  console.log(`Join request: ${username} → lobby ${challengeId} (${ref.key})`);
+  res.json({ success: true, requestId: ref.key });
+});
+
+/**
  * Cleans up stale lobbies every 30 minutes.
  * Deletes any lobby with lastHeartbeat older than 5 minutes.
  */

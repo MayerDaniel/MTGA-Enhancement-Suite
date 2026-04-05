@@ -10,6 +10,13 @@ namespace MTGAEnhancementSuite.Patches
 {
     internal static class ChallengeCreatePatch
     {
+        /// <summary>
+        /// Cached PVPChallengeController instance — captured from Harmony __instance.
+        /// Used by join request handler to call AddChallengeInvite/SendChallengeInvites.
+        /// </summary>
+        internal static object CachedController;
+        internal static Type CachedControllerType;
+
         public static void Apply(Harmony harmony)
         {
             try
@@ -48,10 +55,18 @@ namespace MTGAEnhancementSuite.Patches
             }
         }
 
-        static void Postfix(object __result)
+        static void Postfix(object __instance, object __result)
         {
             try
             {
+                // Cache the PVPChallengeController instance for join request handling
+                if (__instance != null)
+                {
+                    CachedController = __instance;
+                    CachedControllerType = __instance.GetType();
+                    PerPlayerLog.Info($"Cached PVPChallengeController instance: {CachedControllerType.Name}");
+                }
+
                 if (!ChallengeFormatState.HasFormat)
                     return;
 

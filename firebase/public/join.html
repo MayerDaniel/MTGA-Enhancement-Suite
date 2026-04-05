@@ -86,6 +86,70 @@
             color: #888;
         }
         .lobby-details span { color: #e0e0e0; font-weight: 600; }
+
+        /* Join request form */
+        .join-request {
+            margin-top: 24px;
+            padding: 20px 16px;
+            background: rgba(15, 52, 96, 0.6);
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+        }
+        .join-request h3 {
+            font-size: 1rem;
+            color: #e0e0e0;
+            margin-bottom: 12px;
+        }
+        .join-request p {
+            font-size: 0.82rem;
+            color: #888;
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
+        .join-request-form {
+            display: flex;
+            gap: 8px;
+        }
+        .join-request-form input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .join-request-form input:focus {
+            border-color: #e94560;
+        }
+        .join-request-form input::placeholder {
+            color: #555;
+        }
+        .join-request-form button {
+            padding: 10px 18px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .join-request-form button:hover { background: #c73e54; }
+        .join-request-form button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        .join-status {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            min-height: 20px;
+        }
+        .join-status.success { color: #4caf50; }
+        .join-status.error { color: #e94560; }
+        .join-status.pending { color: #ffa726; }
     </style>
 </head>
 <body>
@@ -102,9 +166,19 @@
 
         <a class="manual-link" id="manualLink" style="display:none;">Click here if MTGA didn't open</a>
 
+        <div class="join-request" id="joinRequestSection">
+            <h3>Don't have the mod? Request an invite</h3>
+            <p>Enter your MTGA username below and the lobby host will send you an in-game challenge invite.</p>
+            <div class="join-request-form">
+                <input type="text" id="usernameInput" placeholder="YourName#12345" autocomplete="off">
+                <button id="submitJoinBtn" onclick="submitJoinRequest()">Request Invite</button>
+            </div>
+            <div class="join-status" id="joinStatus"></div>
+        </div>
+
         <div class="info">
-            <strong>Don't have the Enhancement Suite?</strong><br>
-            You need the MTGA Enhancement Suite mod installed to join custom lobbies.
+            <strong>Want the full experience?</strong><br>
+            Install the MTGA Enhancement Suite mod for direct lobby joining, format enforcement, and more.
             <br><br>
             <a href="https://github.com/MayerDaniel/MTGA-Enhancement-Suite" target="_blank">
                 Get it on GitHub &rarr;
@@ -113,36 +187,124 @@
     </div>
 
     <script>
-        (function() {
-            var parts = window.location.pathname.split('/').filter(Boolean);
-            // URL: /join/{challengeId}/{format}
-            var challengeId = parts[1] || '';
-            var format = parts[2] || 'none';
+        var FUNCTIONS_URL = 'https://us-central1-mtga-enhancement-suite.cloudfunctions.net';
 
-            var schemeUrl = 'mtgaes://join/' + challengeId + '/' + format;
+        var parts = window.location.pathname.split('/').filter(Boolean);
+        var challengeId = parts[1] || '';
+        var format = parts[2] || 'none';
 
-            // Show lobby details
-            var detailsEl = document.getElementById('details');
-            if (format && format !== 'none') {
-                detailsEl.innerHTML = 'Format: <span>' + format.charAt(0).toUpperCase() + format.slice(1) + '</span>';
+        var schemeUrl = 'mtgaes://join/' + challengeId + '/' + format;
+
+        // Auto-fill username from localStorage (shared with lobby browser)
+        var savedUser = localStorage.getItem('mtgaes_username');
+        if (savedUser) {
+            document.getElementById('usernameInput').value = savedUser;
+        }
+
+        // Show lobby details
+        var detailsEl = document.getElementById('details');
+        if (format && format !== 'none') {
+            detailsEl.innerHTML = 'Format: <span>' + format.charAt(0).toUpperCase() + format.slice(1) + '</span>';
+        }
+
+        // Try to open the URL handler via hidden iframe
+        var iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = schemeUrl;
+        document.body.appendChild(iframe);
+
+        // Show manual link after delay
+        var manualLink = document.getElementById('manualLink');
+        manualLink.href = schemeUrl;
+
+        setTimeout(function() {
+            manualLink.style.display = 'inline-block';
+            document.getElementById('status').innerHTML =
+                'If MTGA didn\'t open automatically, click the button below.';
+        }, 3000);
+
+        function submitJoinRequest() {
+            var username = document.getElementById('usernameInput').value.trim();
+            var statusEl = document.getElementById('joinStatus');
+            var btn = document.getElementById('submitJoinBtn');
+
+            if (!username) {
+                statusEl.className = 'join-status error';
+                statusEl.textContent = 'Please enter your username.';
+                return;
             }
 
-            // Try to open the URL handler via hidden iframe (avoids navigation away from page)
-            var iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = schemeUrl;
-            document.body.appendChild(iframe);
+            if (!/^.+#\d+$/.test(username)) {
+                statusEl.className = 'join-status error';
+                statusEl.textContent = 'Invalid format. Use YourName#12345';
+                return;
+            }
 
-            // Show manual link after a short delay
-            var manualLink = document.getElementById('manualLink');
-            manualLink.href = schemeUrl;
+            if (!challengeId) {
+                statusEl.className = 'join-status error';
+                statusEl.textContent = 'Invalid lobby link.';
+                return;
+            }
 
-            setTimeout(function() {
-                manualLink.style.display = 'inline-block';
-                document.getElementById('status').innerHTML =
-                    'If MTGA didn\'t open automatically, click the button below.';
-            }, 3000);
-        })();
+            btn.disabled = true;
+            statusEl.className = 'join-status pending';
+            statusEl.textContent = 'Sending request...';
+
+            fetch(FUNCTIONS_URL + '/submitJoinRequest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ challengeId: challengeId, username: username })
+            })
+            .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+            .then(function(result) {
+                if (result.ok && result.data.success) {
+                    statusEl.className = 'join-status success';
+                    statusEl.textContent = 'Invite request sent! Check your MTGA client for the challenge invite.';
+                    // Poll for status update
+                    if (result.data.requestId) {
+                        pollJoinStatus(result.data.requestId);
+                    }
+                } else {
+                    statusEl.className = 'join-status error';
+                    statusEl.textContent = result.data.error || 'Failed to send request.';
+                    btn.disabled = false;
+                }
+            })
+            .catch(function(err) {
+                statusEl.className = 'join-status error';
+                statusEl.textContent = 'Network error. Please try again.';
+                btn.disabled = false;
+            });
+        }
+
+        function pollJoinStatus(requestId) {
+            var statusEl = document.getElementById('joinStatus');
+            var attempts = 0;
+            var maxAttempts = 20; // 20 * 2s = 40s
+
+            var interval = setInterval(function() {
+                attempts++;
+                if (attempts > maxAttempts) {
+                    clearInterval(interval);
+                    return;
+                }
+
+                fetch(FUNCTIONS_URL + '/submitJoinRequest?' +
+                    'challengeId=' + encodeURIComponent(challengeId) +
+                    '&requestId=' + encodeURIComponent(requestId))
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    // We don't have a GET endpoint yet, so this will fail gracefully
+                    // The status update is best-effort
+                })
+                .catch(function() {});
+            }, 2000);
+        }
+
+        // Allow Enter key to submit
+        document.getElementById('usernameInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') submitJoinRequest();
+        });
     </script>
 </body>
 </html>

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MTGA+ — Lobby Browser</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 {
+            font-size: 1.4rem;
+            color: #e94560;
+        }
+        .header h1 a {
+            color: #e94560;
+            text-decoration: none;
+        }
+        .header h1 a:hover { text-decoration: underline; }
+        .username-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .username-bar label {
+            font-size: 0.85rem;
+            color: #888;
+        }
+        .username-bar input {
+            padding: 6px 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+            width: 180px;
+            outline: none;
+        }
+        .username-bar input:focus { border-color: #e94560; }
+        .username-bar button {
+            padding: 6px 12px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+        .username-bar button:hover { background: #1a4a8a; }
+        .username-bar .saved { color: #4caf50; font-size: 0.8rem; display: none; }
+
+        .container {
+            max-width: 900px;
+            margin: 24px auto;
+            padding: 0 20px;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .controls .status {
+            font-size: 0.9rem;
+            color: #888;
+        }
+        .controls button {
+            padding: 8px 16px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .controls button:hover { background: #1a4a8a; }
+
+        .filter-bar {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 6px 14px;
+            border: 1px solid #0f3460;
+            border-radius: 16px;
+            background: transparent;
+            color: #888;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-btn:hover { border-color: #e94560; color: #e0e0e0; }
+        .filter-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+
+        .lobby-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .lobby-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 18px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            transition: border-color 0.15s;
+        }
+        .lobby-row:hover { border-color: #e94560; }
+        .lobby-host {
+            flex: 2;
+            font-size: 1rem;
+            font-weight: 600;
+            color: white;
+        }
+        .lobby-format {
+            flex: 1.5;
+            font-size: 0.9rem;
+            color: #4db8ff;
+        }
+        .lobby-bestof {
+            flex: 0.5;
+            font-size: 0.85rem;
+            color: #888;
+            text-align: center;
+        }
+        .lobby-actions {
+            flex: 1;
+            display: flex;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+        .lobby-actions a, .lobby-actions button {
+            padding: 7px 14px;
+            border-radius: 5px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-join {
+            background: #e94560;
+            color: white;
+        }
+        .btn-join:hover { background: #c73e54; }
+        .btn-request {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+        .btn-request:hover { background: #1a4a8a; }
+        .btn-request.sending { opacity: 0.6; pointer-events: none; }
+        .btn-request.sent { background: #2e7d32; }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #555;
+        }
+        .empty-state h2 { font-size: 1.2rem; margin-bottom: 8px; color: #888; }
+        .empty-state p { font-size: 0.9rem; line-height: 1.5; }
+
+        .info-bar {
+            margin-top: 24px;
+            padding: 14px 18px;
+            background: rgba(233, 69, 96, 0.08);
+            border: 1px solid rgba(233, 69, 96, 0.2);
+            border-radius: 8px;
+            font-size: 0.82rem;
+            color: #888;
+            line-height: 1.5;
+            text-align: center;
+        }
+        .info-bar a { color: #e94560; text-decoration: none; }
+        .info-bar a:hover { text-decoration: underline; }
+
+        @media (max-width: 640px) {
+            .lobby-row { flex-wrap: wrap; gap: 8px; }
+            .lobby-host { flex: 1 1 100%; }
+            .lobby-format, .lobby-bestof { flex: 1; }
+            .lobby-actions { flex: 1 1 100%; justify-content: flex-start; }
+            .header { flex-direction: column; gap: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><a href="https://github.com/MayerDaniel/MTGA-Enhancement-Suite" target="_blank">MTGA+</a> Lobby Browser</h1>
+        <div class="username-bar">
+            <label>Your username:</label>
+            <input type="text" id="savedUsername" placeholder="Name#12345" autocomplete="off">
+            <button onclick="saveUsername()">Save</button>
+            <span class="saved" id="savedMsg">Saved!</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="controls">
+            <span class="status" id="status">Loading...</span>
+            <button onclick="refreshLobbies()">Refresh</button>
+        </div>
+
+        <div class="filter-bar" id="filterBar">
+            <button class="filter-btn active" data-filter="all" onclick="setFilter('all', this)">All</button>
+        </div>
+
+        <div class="lobby-list" id="lobbyList"></div>
+
+        <div class="info-bar">
+            Install <a href="https://github.com/MayerDaniel/MTGA-Enhancement-Suite" target="_blank">MTGA+</a>
+            for direct lobby joining, custom format enforcement, and more.
+            Auto-refresh every 15 seconds.
+        </div>
+    </div>
+
+    <script>
+        var FUNCTIONS_URL = 'https://us-central1-mtga-enhancement-suite.cloudfunctions.net';
+        var allLobbies = [];
+        var currentFilter = 'all';
+        var refreshTimer = null;
+
+        // --- Username persistence ---
+        function loadUsername() {
+            var saved = localStorage.getItem('mtgaes_username');
+            if (saved) {
+                document.getElementById('savedUsername').value = saved;
+            }
+            return saved || '';
+        }
+
+        function saveUsername() {
+            var val = document.getElementById('savedUsername').value.trim();
+            if (val && /^.+#\d+$/.test(val)) {
+                localStorage.setItem('mtgaes_username', val);
+                var msg = document.getElementById('savedMsg');
+                msg.style.display = 'inline';
+                setTimeout(function() { msg.style.display = 'none'; }, 2000);
+            } else if (val) {
+                alert('Invalid format. Use Name#12345');
+            } else {
+                localStorage.removeItem('mtgaes_username');
+            }
+        }
+
+        // Also save on Enter
+        document.getElementById('savedUsername').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') saveUsername();
+        });
+
+        // --- Format display helpers ---
+        var FORMAT_DISPLAY = {
+            none: 'No Format',
+            pauper: 'Pauper (Paper Banlist)',
+            historicpauper: 'Historic Pauper',
+            standardpauper: 'Standard Pauper',
+            planarstandard: 'Planar Standard',
+            modern: 'Modern'
+        };
+
+        function formatName(key) {
+            return FORMAT_DISPLAY[key] || key.charAt(0).toUpperCase() + key.slice(1);
+        }
+
+        // --- Filter ---
+        function setFilter(filter, btn) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            renderLobbies();
+        }
+
+        function buildFilterBar() {
+            var formats = {};
+            allLobbies.forEach(function(l) {
+                if (l.format && l.format !== 'none') formats[l.format] = true;
+            });
+
+            var bar = document.getElementById('filterBar');
+            // Keep the All button, remove others
+            bar.innerHTML = '<button class="filter-btn' + (currentFilter === 'all' ? ' active' : '') +
+                '" data-filter="all" onclick="setFilter(\'all\', this)">All</button>';
+
+            Object.keys(formats).sort().forEach(function(f) {
+                var active = currentFilter === f ? ' active' : '';
+                bar.innerHTML += '<button class="filter-btn' + active +
+                    '" data-filter="' + f + '" onclick="setFilter(\'' + f + '\', this)">' +
+                    formatName(f) + '</button>';
+            });
+        }
+
+        // --- Lobby rendering ---
+        function renderLobbies() {
+            var list = document.getElementById('lobbyList');
+            var filtered = currentFilter === 'all'
+                ? allLobbies
+                : allLobbies.filter(function(l) { return l.format === currentFilter; });
+
+            if (filtered.length === 0) {
+                list.innerHTML = '<div class="empty-state">' +
+                    '<h2>No lobbies available</h2>' +
+                    '<p>No one is hosting right now. Check back soon or create your own lobby in-game!</p>' +
+                    '</div>';
+                document.getElementById('status').textContent = 'No lobbies found';
+                return;
+            }
+
+            var savedUser = loadUsername();
+            var html = '';
+
+            filtered.forEach(function(lobby) {
+                var joinUrl = '/join/' + lobby.id + '/' + (lobby.format || 'none');
+                var bestOf = lobby.isBestOf3 ? 'Bo3' : 'Bo1';
+
+                html += '<div class="lobby-row" data-id="' + lobby.id + '">';
+                html += '<div class="lobby-host">' + escapeHtml(lobby.host) + '</div>';
+                html += '<div class="lobby-format">' + formatName(lobby.format) + '</div>';
+                html += '<div class="lobby-bestof">' + bestOf + '</div>';
+                html += '<div class="lobby-actions">';
+                html += '<a class="btn-join" href="' + joinUrl + '">Join</a>';
+
+                if (savedUser) {
+                    html += '<button class="btn-request" onclick="quickJoin(\'' +
+                        lobby.id + '\', this)">Quick Join</button>';
+                } else {
+                    html += '<button class="btn-request" onclick="quickJoin(\'' +
+                        lobby.id + '\', this)">Request Invite</button>';
+                }
+
+                html += '</div></div>';
+            });
+
+            list.innerHTML = html;
+            document.getElementById('status').textContent = filtered.length +
+                (filtered.length === 1 ? ' lobby' : ' lobbies') + ' available';
+        }
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // --- Quick join (request invite with saved username) ---
+        function quickJoin(lobbyId, btn) {
+            var username = loadUsername();
+            if (!username) {
+                // No saved username — prompt in the saved username field
+                document.getElementById('savedUsername').focus();
+                document.getElementById('savedUsername').style.borderColor = '#e94560';
+                setTimeout(function() {
+                    document.getElementById('savedUsername').style.borderColor = '';
+                }, 2000);
+                return;
+            }
+
+            btn.classList.add('sending');
+            btn.textContent = 'Sending...';
+
+            fetch(FUNCTIONS_URL + '/submitJoinRequest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ challengeId: lobbyId, username: username })
+            })
+            .then(function(resp) { return resp.json().then(function(d) { return { ok: resp.ok, data: d }; }); })
+            .then(function(result) {
+                btn.classList.remove('sending');
+                if (result.ok && result.data.success) {
+                    btn.classList.add('sent');
+                    btn.textContent = 'Invite Sent!';
+                } else {
+                    btn.textContent = result.data.error || 'Failed';
+                    setTimeout(function() {
+                        btn.textContent = username ? 'Quick Join' : 'Request Invite';
+                        btn.classList.remove('sent');
+                    }, 3000);
+                }
+            })
+            .catch(function() {
+                btn.classList.remove('sending');
+                btn.textContent = 'Error';
+                setTimeout(function() { btn.textContent = username ? 'Quick Join' : 'Request Invite'; }, 3000);
+            });
+        }
+
+        // --- Fetch lobbies ---
+        function refreshLobbies() {
+            document.getElementById('status').textContent = 'Loading...';
+
+            fetch(FUNCTIONS_URL + '/listPublicLobbies')
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                allLobbies = data.lobbies || [];
+                buildFilterBar();
+                renderLobbies();
+            })
+            .catch(function(err) {
+                document.getElementById('status').textContent = 'Failed to load lobbies';
+                console.error(err);
+            });
+        }
+
+        // --- Init ---
+        loadUsername();
+        refreshLobbies();
+        refreshTimer = setInterval(refreshLobbies, 15000);
+    </script>
+</body>
+</html>

@@ -632,6 +632,27 @@ namespace MTGAEnhancementSuite.UI
             PerPlayerLog.Info($"Attempting to join lobby {challengeId} with format {format}");
             Toast.Info($"Joining lobby...");
 
+            // Pre-check: does the lobby still exist in Firebase?
+            FirebaseClient.Instance.DatabaseGet($"lobbies/{challengeId}", lobbyData =>
+            {
+                if (lobbyData == null || lobbyData.Type == Newtonsoft.Json.Linq.JTokenType.Null
+                    || lobbyData.ToString() == "null")
+                {
+                    PerPlayerLog.Warning($"Lobby {challengeId} not found in Firebase — showing recovery");
+                    ShowJoinFailedRecovery(format);
+                    return;
+                }
+
+                // Capture bestOf from lobby data
+                var isBestOf3 = lobbyData["isBestOf3"]?.Value<bool>() ?? false;
+                ChallengeFormatState.IsBestOf3 = isBestOf3;
+
+                DoJoinLobby(challengeId, format);
+            });
+        }
+
+        private static void DoJoinLobby(string challengeId, string format)
+        {
             ChallengeFormatState.SelectedFormat = format;
             ChallengeFormatState.IsJoining = true;
             ChallengeFormatState.InLobbySession = true;
@@ -641,10 +662,6 @@ namespace MTGAEnhancementSuite.UI
             {
                 Close();
 
-                // Use ChallengeCommunicationWrapper to join — it calls ChallengeJoin
-                // AND converts the response into PVPChallengeData AND feeds it into
-                // the controller via HandleChallengeGeneralUpdate.
-                // This is what the normal invite-accept flow does.
                 FirebaseClient.Instance.StartCoroutine(
                     JoinViaChallengeCommunicationWrapper(challengeId));
             }
@@ -832,8 +849,8 @@ namespace MTGAEnhancementSuite.UI
                     PerPlayerLog.Error($"Failed to read diagnostics: {diagEx.Message}");
                 }
 
-                Toast.Error("Failed to join challenge. Is the host still in the lobby?");
                 ChallengeFormatState.IsJoining = false;
+                ShowJoinFailedRecovery(ChallengeFormatState.SelectedFormat);
                 yield break;
             }
 
@@ -1281,6 +1298,243 @@ namespace MTGAEnhancementSuite.UI
             tmp.alignment = TextAlignmentOptions.Center;
 
             return btn;
+        }
+
+        // --- Failed Join Recovery Modal ---
+
+        private static void ShowJoinFailedRecovery(string format)
+        {
+            int nameIdx = Array.IndexOf(ChallengeFormatState.FormatKeys, format);
+            string formatDisplay = nameIdx >= 0 ? ChallengeFormatState.FormatOptions[nameIdx] : format;
+
+            var modal = new GameObject("JoinFailedModal");
+            UnityEngine.Object.DontDestroyOnLoad(modal);
+
+            var canvas = modal.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 150;
+
+            var scaler = modal.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            modal.AddComponent<GraphicRaycaster>();
+
+            // Dark overlay
+            var bg = CreateChild(modal.transform, "Bg");
+            StretchFull(bg);
+            bg.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.7f);
+
+            // Dialog box
+            var dialog = CreateChild(modal.transform, "Dialog");
+            var dialogRect = dialog.GetComponent<RectTransform>();
+            dialogRect.anchorMin = new Vector2(0.3f, 0.35f);
+            dialogRect.anchorMax = new Vector2(0.7f, 0.65f);
+            dialogRect.sizeDelta = Vector2.zero;
+            dialog.AddComponent<Image>().color = new Color(0.1f, 0.1f, 0.18f, 0.98f);
+
+            // Title
+            var titleObj = CreateChild(dialog.transform, "Title");
+            var titleRect = titleObj.GetComponent<RectTransform>();
+            titleRect.anchorMin = new Vector2(0.05f, 0.7f);
+            titleRect.anchorMax = new Vector2(0.95f, 0.95f);
+            titleRect.sizeDelta = Vector2.zero;
+            var titleTmp = titleObj.AddComponent<TextMeshProUGUI>();
+            titleTmp.text = "Lobby Unavailable";
+            titleTmp.fontSize = 24;
+            titleTmp.fontStyle = FontStyles.Bold;
+            titleTmp.color = Color.white;
+            titleTmp.alignment = TextAlignmentOptions.Center;
+
+            // Body
+            var bodyObj = CreateChild(dialog.transform, "Body");
+            var bodyRect = bodyObj.GetComponent<RectTransform>();
+            bodyRect.anchorMin = new Vector2(0.08f, 0.35f);
+            bodyRect.anchorMax = new Vector2(0.92f, 0.7f);
+            bodyRect.sizeDelta = Vector2.zero;
+            var bodyTmp = bodyObj.AddComponent<TextMeshProUGUI>();
+            bodyTmp.text = format != "none"
+                ? $"This lobby is no longer available.\nWould you like to create a new {formatDisplay} lobby?"
+                : "This lobby is no longer available.\nWould you like to create a new lobby?";
+            bodyTmp.fontSize = 16;
+            bodyTmp.color = new Color(0.8f, 0.8f, 0.85f);
+            bodyTmp.alignment = TextAlignmentOptions.Center;
+
+            // Create New Lobby button
+            var createBtn = CreateChild(dialog.transform, "CreateBtn");
+            var createRect = createBtn.GetComponent<RectTransform>();
+            createRect.anchorMin = new Vector2(0.1f, 0.08f);
+            createRect.anchorMax = new Vector2(0.48f, 0.28f);
+            createRect.sizeDelta = Vector2.zero;
+            createBtn.AddComponent<Image>().color = new Color(0.2f, 0.5f, 0.3f, 0.9f);
+            var createBtnComp = createBtn.AddComponent<Button>();
+
+            var createTextObj = CreateChild(createBtn.transform, "Text");
+            StretchFull(createTextObj);
+            var createTmp = createTextObj.AddComponent<TextMeshProUGUI>();
+            createTmp.text = "Create New Lobby";
+            createTmp.fontSize = 15;
+            createTmp.fontStyle = FontStyles.Bold;
+            createTmp.color = Color.white;
+            createTmp.alignment = TextAlignmentOptions.Center;
+
+            var capturedFormat = format;
+            var capturedModal = modal;
+            createBtnComp.onClick.AddListener(new UnityAction(() =>
+            {
+                UnityEngine.Object.Destroy(capturedModal);
+                CreateNewLobbyWithSettings(capturedFormat);
+            }));
+
+            // Cancel button
+            var cancelBtn = CreateChild(dialog.transform, "CancelBtn");
+            var cancelRect = cancelBtn.GetComponent<RectTransform>();
+            cancelRect.anchorMin = new Vector2(0.52f, 0.08f);
+            cancelRect.anchorMax = new Vector2(0.9f, 0.28f);
+            cancelRect.sizeDelta = Vector2.zero;
+            cancelBtn.AddComponent<Image>().color = new Color(0.4f, 0.2f, 0.2f, 0.9f);
+            var cancelBtnComp = cancelBtn.AddComponent<Button>();
+
+            var cancelTextObj = CreateChild(cancelBtn.transform, "Text");
+            StretchFull(cancelTextObj);
+            var cancelTmp = cancelTextObj.AddComponent<TextMeshProUGUI>();
+            cancelTmp.text = "Cancel";
+            cancelTmp.fontSize = 15;
+            cancelTmp.color = Color.white;
+            cancelTmp.alignment = TextAlignmentOptions.Center;
+
+            var capturedModal2 = modal;
+            cancelBtnComp.onClick.AddListener(new UnityAction(() =>
+            {
+                UnityEngine.Object.Destroy(capturedModal2);
+                ChallengeFormatState.Reset();
+            }));
+
+            PerPlayerLog.Info($"Showing join failed recovery modal (format={format})");
+        }
+
+        private static void CreateNewLobbyWithSettings(string format)
+        {
+            PerPlayerLog.Info($"Creating new lobby with format={format}");
+            ChallengeFormatState.SelectedFormat = format;
+            ChallengeFormatState.IsJoining = false;
+            ChallengeFormatState.InLobbySession = true;
+
+            FirebaseClient.Instance.StartCoroutine(CreateLobbyAndNavigate(format));
+        }
+
+        private static IEnumerator CreateLobbyAndNavigate(string format)
+        {
+            // Step 1: Get PVPChallengeController (cached from ChallengeCreatePatch)
+            var controller = Patches.ChallengeCreatePatch.CachedController;
+            var controllerType = Patches.ChallengeCreatePatch.CachedControllerType;
+
+            if (controller == null || controllerType == null)
+            {
+                PerPlayerLog.Warning("No cached PVPChallengeController — falling back to manual");
+                Toast.Info($"Open Friends List > Challenge to create a new {format} lobby.");
+                yield break;
+            }
+
+            // Step 2: Call CreateAndCacheChallenge()
+            var createMethod = AccessTools.Method(controllerType, "CreateAndCacheChallenge");
+            if (createMethod == null)
+            {
+                PerPlayerLog.Error("CreateAndCacheChallenge method not found");
+                Toast.Info($"Open Friends List > Challenge to create a new {format} lobby.");
+                yield break;
+            }
+
+            PerPlayerLog.Info("Calling CreateAndCacheChallenge...");
+            Toast.Info("Creating lobby...");
+            object promise;
+            try
+            {
+                // CreateAndCacheChallenge(bool forceCreate = false)
+                promise = createMethod.Invoke(controller, new object[] { false });
+            }
+            catch (Exception ex)
+            {
+                PerPlayerLog.Error($"CreateAndCacheChallenge failed: {ex}");
+                Toast.Error("Failed to create lobby.");
+                yield break;
+            }
+
+            // Step 3: Wait for promise
+            var isDoneProp = AccessTools.Property(promise.GetType(), "IsDone");
+            var successProp = AccessTools.Property(promise.GetType(), "Successful");
+            var resultProp = AccessTools.Property(promise.GetType(), "Result");
+
+            for (int i = 0; i < 30; i++)
+            {
+                yield return new WaitForSeconds(0.5f);
+                if (isDoneProp != null && (bool)isDoneProp.GetValue(promise)) break;
+            }
+
+            bool success = successProp != null && (bool)successProp.GetValue(promise);
+            if (!success)
+            {
+                PerPlayerLog.Error("CreateAndCacheChallenge promise failed");
+                Toast.Error("Failed to create lobby.");
+                yield break;
+            }
+
+            var challengeData = resultProp?.GetValue(promise);
+            if (challengeData == null)
+            {
+                PerPlayerLog.Error("CreateAndCacheChallenge returned null");
+                Toast.Error("Failed to create lobby.");
+                yield break;
+            }
+
+            // Get the ChallengeId from the result
+            var cidField = AccessTools.Field(challengeData.GetType(), "ChallengeId");
+            if (cidField == null)
+            {
+                PerPlayerLog.Error("ChallengeId field not found on result");
+                yield break;
+            }
+
+            var challengeId = (Guid)cidField.GetValue(challengeData);
+            ChallengeFormatState.ActiveChallengeId = challengeId;
+            PerPlayerLog.Info($"Challenge created: {challengeId}");
+
+            // Step 4: Navigate to the challenge view via SocialUI.OpenPlayBlade(Guid)
+            var socialUIType = AccessTools.TypeByName("SocialUI");
+            if (socialUIType == null)
+            {
+                PerPlayerLog.Error("SocialUI type not found");
+                yield break;
+            }
+
+            var instanceField = AccessTools.Field(socialUIType, "_instance");
+            if (instanceField == null)
+            {
+                PerPlayerLog.Error("SocialUI._instance field not found");
+                yield break;
+            }
+
+            var socialUI = instanceField.GetValue(null);
+            if (socialUI == null)
+            {
+                PerPlayerLog.Error("SocialUI._instance is null");
+                yield break;
+            }
+
+            // OpenPlayBlade(Guid challengeId)
+            var openPlayBlade = AccessTools.Method(socialUIType, "OpenPlayBlade",
+                new[] { typeof(Guid) });
+            if (openPlayBlade == null)
+            {
+                PerPlayerLog.Error("SocialUI.OpenPlayBlade(Guid) not found");
+                yield break;
+            }
+
+            PerPlayerLog.Info($"Calling SocialUI.OpenPlayBlade({challengeId})");
+            openPlayBlade.Invoke(socialUI, new object[] { challengeId });
+
+            int nameIdx = Array.IndexOf(ChallengeFormatState.FormatKeys, format);
+            string formatDisplay = nameIdx >= 0 ? ChallengeFormatState.FormatOptions[nameIdx] : format;
+            Toast.Success($"New {formatDisplay} lobby created!");
         }
     }
 }

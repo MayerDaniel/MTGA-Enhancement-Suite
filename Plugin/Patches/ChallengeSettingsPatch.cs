@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using MTGAEnhancementSuite.Firebase;
 using MTGAEnhancementSuite.State;
@@ -529,6 +531,7 @@ namespace MTGAEnhancementSuite.Patches
                             ChallengeFormatState.IsLobbyPublic = true;
                             _lobbyRegistered = true;
                             FirebaseClient.Instance.StartHeartbeat(challengeIdStr);
+                            StartHostSseListener();
                             Toast.Success("Lobby is now public!");
                             Plugin.Log.LogInfo($"MakePublic succeeded for {challengeIdStr}");
                         }
@@ -589,6 +592,7 @@ namespace MTGAEnhancementSuite.Patches
                             _lobbyRegistered = true;
                             PerPlayerLog.Info($"Lobby {challengeId} registered (private) for format sync");
                             FirebaseClient.Instance.StartHeartbeat(challengeId.ToString());
+                            StartHostSseListener();
                         }
                         else
                         {
@@ -733,11 +737,10 @@ namespace MTGAEnhancementSuite.Patches
             if (!client.IsAuthenticated) return;
 
             // Stop any existing listener before creating a new one
-            // This prevents orphaned background threads
             FirebaseSseListener.Instance?.Dispose();
 
             var listener = new FirebaseSseListener();
-            listener.OnDataChanged += (path, data) => HandleSseFormatChange(path, data);
+            listener.OnDataChanged += (path, data) => HandleSseDataChange(path, data);
 
             var token = client.IdToken;
             if (string.IsNullOrEmpty(token))
@@ -750,20 +753,92 @@ namespace MTGAEnhancementSuite.Patches
             listener.Start($"lobbies/{ChallengeFormatState.ActiveChallengeId}", token);
         }
 
-        private static void HandleSseFormatChange(string path, Newtonsoft.Json.Linq.JToken data)
+        /// <summary>
+        /// Starts an SSE listener on the HOST side to receive join requests from the web page.
+        /// Called when the lobby is registered or made public.
+        /// </summary>
+        internal static void StartHostSseListener()
         {
+            if (ChallengeFormatState.ActiveChallengeId == Guid.Empty) return;
+            if (ChallengeFormatState.IsJoining) return; // Only host, not joiner
+
+            var client = FirebaseClient.Instance;
+            if (!client.IsAuthenticated) return;
+
+            // Don't restart if already listening
+            if (FirebaseSseListener.Instance != null) return;
+
+            var listener = new FirebaseSseListener();
+            listener.OnDataChanged += (path, data) => HandleSseDataChange(path, data);
+
+            var token = client.IdToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                Plugin.Log.LogWarning("Host SSE: No auth token available");
+                return;
+            }
+
+            Plugin.Log.LogInfo($"Host SSE: Starting listener for lobby {ChallengeFormatState.ActiveChallengeId}");
+            PerPlayerLog.Info($"Host SSE: Starting listener for lobby {ChallengeFormatState.ActiveChallengeId}");
+            listener.Start($"lobbies/{ChallengeFormatState.ActiveChallengeId}", token);
+        }
+
+        /// <summary>
+        /// Handles all SSE data changes on the lobby path — format changes (joiner)
+        /// and join requests (host).
+        /// </summary>
+        private static void HandleSseDataChange(string path, Newtonsoft.Json.Linq.JToken data)
+        {
+            // --- Format change handling (for joiner) ---
             string newFormat = null;
 
             if (path == "/" && data is Newtonsoft.Json.Linq.JObject obj)
             {
-                // Full object update — extract format
                 newFormat = obj["format"]?.ToString();
+
+                // Also check for join requests in full object updates (host)
+                if (!ChallengeFormatState.IsJoining)
+                {
+                    var joinRequests = obj["joinRequests"] as Newtonsoft.Json.Linq.JObject;
+                    if (joinRequests != null)
+                    {
+                        foreach (var prop in joinRequests.Properties())
+                        {
+                            var req = prop.Value as Newtonsoft.Json.Linq.JObject;
+                            if (req != null && req["status"]?.ToString() == "pending")
+                            {
+                                HandleJoinRequest(prop.Name, req);
+                            }
+                        }
+                    }
+                }
             }
             else if (path == "/format")
             {
                 newFormat = data?.ToString();
             }
 
+            // --- Join request handling (for host) ---
+            if (!ChallengeFormatState.IsJoining && path.StartsWith("/joinRequests/"))
+            {
+                // Path like /joinRequests/{pushId} or /joinRequests/{pushId}/status
+                var segments = path.Split('/');
+                if (segments.Length >= 3)
+                {
+                    var pushId = segments[2];
+                    // Only handle new requests, not status updates
+                    if (segments.Length == 3 && data is Newtonsoft.Json.Linq.JObject reqObj)
+                    {
+                        if (reqObj["status"]?.ToString() == "pending")
+                        {
+                            HandleJoinRequest(pushId, reqObj);
+                        }
+                    }
+                }
+                return; // Don't process as format change
+            }
+
+            // --- Process format change ---
             if (newFormat == null || newFormat == ChallengeFormatState.SelectedFormat) return;
 
             Plugin.Log.LogInfo($"SSE: Host changed format to {newFormat}");
@@ -787,10 +862,160 @@ namespace MTGAEnhancementSuite.Patches
                 catch (Exception ex) { Plugin.Log.LogWarning($"SSE: Could not clear deck: {ex.Message}"); }
             }
 
-            // Find the human-readable format name
             int nameIdx = Array.IndexOf(ChallengeFormatState.FormatKeys, newFormat);
             string displayName = nameIdx >= 0 ? ChallengeFormatState.FormatOptions[nameIdx] : newFormat;
             Toast.Info($"Host changed format to {displayName}");
+        }
+
+        // --- Join Request Invite Flow ---
+
+        private static readonly HashSet<string> _processedJoinRequests = new HashSet<string>();
+
+        private static void HandleJoinRequest(string pushId, Newtonsoft.Json.Linq.JObject data)
+        {
+            if (_processedJoinRequests.Contains(pushId)) return;
+            _processedJoinRequests.Add(pushId);
+
+            var username = data["username"]?.ToString();
+            if (string.IsNullOrEmpty(username)) return;
+
+            PerPlayerLog.Info($"Join request received: {username} (id={pushId})");
+            Toast.Info($"Invite request from {ChallengeFormatState.StripDiscriminator(username)}...");
+
+            FirebaseClient.Instance.StartCoroutine(ResolveAndInvitePlayer(username, pushId));
+        }
+
+        private static IEnumerator ResolveAndInvitePlayer(string username, string pushId)
+        {
+            // Step 1: Resolve username → PersonaId via ISocialManager
+            var pantryType = AccessTools.TypeByName("Pantry");
+            Type socialManagerType = null;
+
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                foreach (var t in asm.GetTypes())
+                    if (t.Name == "ISocialManager" && t.IsInterface)
+                    { socialManagerType = t; break; }
+
+            if (pantryType == null || socialManagerType == null)
+            {
+                PerPlayerLog.Error("ResolveAndInvite: Pantry or ISocialManager not found");
+                Toast.Error($"Could not invite {ChallengeFormatState.StripDiscriminator(username)}");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            object socialManager;
+            try
+            {
+                var getMethod = pantryType.GetMethod("Get").MakeGenericMethod(socialManagerType);
+                socialManager = getMethod.Invoke(null, null);
+            }
+            catch (Exception ex)
+            {
+                PerPlayerLog.Error($"ResolveAndInvite: Failed to get ISocialManager: {ex.Message}");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            var resolveMethod = AccessTools.Method(socialManager.GetType(), "GetPlayerIdFromFullPlayerName");
+            if (resolveMethod == null)
+            {
+                PerPlayerLog.Error("ResolveAndInvite: GetPlayerIdFromFullPlayerName not found");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            PerPlayerLog.Info($"Resolving player: {username}");
+            var promise = resolveMethod.Invoke(socialManager, new object[] { username });
+
+            // Poll promise for up to 10 seconds
+            var isDoneProp = AccessTools.Property(promise.GetType(), "IsDone");
+            var successProp = AccessTools.Property(promise.GetType(), "Successful");
+            var resultProp = AccessTools.Property(promise.GetType(), "Result");
+
+            for (int i = 0; i < 20; i++)
+            {
+                yield return new WaitForSeconds(0.5f);
+                if (isDoneProp != null && (bool)isDoneProp.GetValue(promise)) break;
+            }
+
+            bool resolved = successProp != null && (bool)successProp.GetValue(promise);
+            if (!resolved)
+            {
+                PerPlayerLog.Warning($"Could not find player: {username}");
+                Toast.Warning($"Player not found: {ChallengeFormatState.StripDiscriminator(username)}");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            var playerId = resultProp?.GetValue(promise)?.ToString();
+            if (string.IsNullOrEmpty(playerId))
+            {
+                PerPlayerLog.Warning($"Player resolve returned empty: {username}");
+                Toast.Warning($"Player not found: {ChallengeFormatState.StripDiscriminator(username)}");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            PerPlayerLog.Info($"Resolved {username} → {playerId}");
+
+            // Step 2: Send invite via PVPChallengeController
+            var controller = ChallengeCreatePatch.CachedController;
+            var controllerType = ChallengeCreatePatch.CachedControllerType;
+
+            if (controller == null || controllerType == null)
+            {
+                PerPlayerLog.Error("ResolveAndInvite: No cached PVPChallengeController");
+                Toast.Error("Could not send invite (no challenge controller)");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            var challengeId = ChallengeFormatState.ActiveChallengeId;
+            if (challengeId == Guid.Empty)
+            {
+                PerPlayerLog.Error("ResolveAndInvite: No active challenge ID");
+                UpdateJoinRequestStatus(pushId, "failed");
+                yield break;
+            }
+
+            try
+            {
+                var addInviteMethod = AccessTools.Method(controllerType, "AddChallengeInvite");
+                var sendInvitesMethod = AccessTools.Method(controllerType, "SendChallengeInvites");
+
+                if (addInviteMethod == null || sendInvitesMethod == null)
+                {
+                    PerPlayerLog.Error($"ResolveAndInvite: Methods not found — add={addInviteMethod != null}, send={sendInvitesMethod != null}");
+                    UpdateJoinRequestStatus(pushId, "failed");
+                    yield break;
+                }
+
+                PerPlayerLog.Info($"Calling AddChallengeInvite({challengeId}, {username}, {playerId})");
+                addInviteMethod.Invoke(controller, new object[] { challengeId, username, playerId });
+
+                PerPlayerLog.Info($"Calling SendChallengeInvites({challengeId})");
+                sendInvitesMethod.Invoke(controller, new object[] { challengeId });
+
+                Toast.Success($"Invite sent to {ChallengeFormatState.StripDiscriminator(username)}!");
+                PerPlayerLog.Info($"Invite sent to {username} ({playerId})");
+                UpdateJoinRequestStatus(pushId, "sent");
+            }
+            catch (Exception ex)
+            {
+                PerPlayerLog.Error($"Failed to send invite: {ex}");
+                Toast.Error($"Failed to invite {ChallengeFormatState.StripDiscriminator(username)}");
+                UpdateJoinRequestStatus(pushId, "failed");
+            }
+        }
+
+        private static void UpdateJoinRequestStatus(string pushId, string status)
+        {
+            if (ChallengeFormatState.ActiveChallengeId == Guid.Empty) return;
+            var challengeId = ChallengeFormatState.ActiveChallengeId.ToString();
+            FirebaseClient.Instance.PatchLobby(challengeId,
+                $"{{\"joinRequests/{pushId}/status\":\"{status}\"}}");
+            PerPlayerLog.Info($"Updated join request {pushId} status to: {status}");
         }
 
         private static GameObject CreateSimpleButton(Transform parent, string name, string label,

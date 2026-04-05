@@ -19,6 +19,10 @@
       {
         "source": "/join/**",
         "destination": "/join.html"
+      },
+      {
+        "source": "/lobbies",
+        "destination": "/lobbies.html"
       }
     ]
   }
