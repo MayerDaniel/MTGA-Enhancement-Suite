@@ -448,6 +448,6 @@ namespace MTGAEnhancementSuite
     {
         public const string GUID = "com.mtgaenhancement.suite";
         public const string NAME = "MTGA Enhancement Suite";
-        public const string VERSION = "0.12.0";
+        public const string VERSION = "0.13.0";
     }
 }
