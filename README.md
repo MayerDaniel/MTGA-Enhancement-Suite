@@ -11,7 +11,11 @@ A [BepInEx 5](https://github.com/BepInEx/BepInEx) mod for **Magic: The Gathering
 
 ## Installation (Windows)
 
-### One-Line Install
+### Installer (Recommended)
+
+Download **[MTGAPlus-Installer.exe](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest/download/MTGAPlus-Installer.exe)** from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest) and run it. No dependencies needed.
+
+### Command-Line Install
 
 Open **PowerShell**, **CMD**, or **Windows Terminal** and run:
 
@@ -19,7 +23,7 @@ Open **PowerShell**, **CMD**, or **Windows Terminal** and run:
 powershell -c "irm https://raw.githubusercontent.com/MayerDaniel/MTGA-Enhancement-Suite/main/install.ps1 | iex"
 ```
 
-This will:
+Both methods will:
 1. Find your MTGA installation
 2. Install BepInEx 5 (if not already present)
 3. Download the latest plugin release
