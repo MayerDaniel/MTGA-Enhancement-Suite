@@ -561,7 +561,7 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
  * Deletes any lobby with lastHeartbeat older than 5 minutes.
  */
 exports.cleanStaleLobbies = onScheduleV2(
-  { schedule: "*/30 * * * *", timeZone: "UTC" },
+  { schedule: "*/30 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
   async (event) => {
     const now = Math.floor(Date.now() / 1000);
     const staleThreshold = now - 300; // 5 minutes
@@ -570,20 +570,41 @@ exports.cleanStaleLobbies = onScheduleV2(
     if (!lobbiesSnap.exists()) return;
 
     const lobbies = lobbiesSnap.val();
-    const deletions = [];
+    const staleIds = [];
 
     for (const [id, lobby] of Object.entries(lobbies)) {
       const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
       if (lastHeartbeat < staleThreshold) {
-        deletions.push(admin.database().ref(`lobbies/${id}`).remove());
-        console.log(`Deleting stale lobby ${id} (last heartbeat: ${lastHeartbeat})`);
+        staleIds.push(id);
       }
     }
 
-    if (deletions.length > 0) {
-      await Promise.all(deletions);
-      console.log(`Cleaned up ${deletions.length} stale lobbies`);
+    if (staleIds.length === 0) return;
+
+    // Expire Discord messages before deleting lobbies
+    const secrets = {
+      general: discordWebhookUrl.value(),
+      planar: discordPlanarStdWebhookUrl.value(),
+      pauper: discordPauperWebhookUrl.value(),
+    };
+
+    for (const id of staleIds) {
+      const lobby = lobbies[id];
+      if (lobby.discordMessages) {
+        console.log(`Expiring Discord messages for stale lobby ${id}`);
+        try {
+          await expireDiscordMessages(id, lobby, secrets);
+        } catch (err) {
+          console.error(`Failed to expire messages for ${id}: ${err.message}`);
+        }
+      }
+      console.log(`Deleting stale lobby ${id} (last heartbeat: ${lobby.lastHeartbeat || lobby.createdAt || 0})`);
     }
+
+    // Delete all stale lobbies
+    const deletions = staleIds.map(id => admin.database().ref(`lobbies/${id}`).remove());
+    await Promise.all(deletions);
+    console.log(`Cleaned up ${staleIds.length} stale lobbies`);
   }
 );
 
