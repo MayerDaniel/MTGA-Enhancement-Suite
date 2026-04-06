@@ -65,7 +65,9 @@
             background: #14142a;
             color: #c8c8d8;
             font-size: 0.8rem;
-            width: 160px;
+            width: 140px;
+            min-width: 0;
+            flex: 1 1 100px;
             outline: none;
         }
         .username-bar input:focus { border-color: #e94560; }
@@ -220,11 +222,14 @@
             .lobby-host { flex: 1 1 100%; }
             .lobby-format, .lobby-bestof { flex: 1; }
             .lobby-actions { flex: 1 1 100%; justify-content: flex-start; }
+            .header { padding: 0 12px; }
+            .header-left { gap: 12px; }
             .header-links, .username-bar { display: none; }
             .header-hamburger { display: block; }
             .header.mobile-open { flex-wrap: wrap; height: auto; padding-bottom: 12px; }
-            .header.mobile-open .header-links { display: flex; width: 100%; order: 3; padding-top: 8px; }
-            .header.mobile-open .username-bar { display: flex; width: 100%; order: 4; padding-top: 8px; flex-wrap: wrap; }
+            .header.mobile-open .header-links { display: flex; flex-direction: column; width: 100%; order: 3; padding-top: 8px; gap: 8px; }
+            .header.mobile-open .username-bar { display: flex; width: 100%; order: 4; padding-top: 8px; }
+            .header.mobile-open .username-bar input { flex: 1 1 0; width: auto; min-width: 0; }
         }
     </style>
 </head>

@@ -25,9 +25,9 @@
         .nav-links { display: flex; gap: 20px; }
         .nav-links a { color: #888; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; text-decoration: none; }
         .nav-links a:hover { color: #e0e0e0; }
-        .nav-right { display: flex; align-items: center; gap: 8px; }
+        .nav-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .nav-right label { font-size: 0.78rem; color: #555; }
-        .nav-right input { padding: 5px 10px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #c8c8d8; font-size: 0.8rem; width: 160px; outline: none; }
+        .nav-right input { padding: 5px 10px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #c8c8d8; font-size: 0.8rem; width: 140px; min-width: 0; flex: 1 1 100px; outline: none; }
         .nav-right input:focus { border-color: #e94560; }
         .nav-right button { padding: 5px 10px; background: #0f3460; color: #888; border: 1px solid #0f3460; border-radius: 4px; font-size: 0.75rem; cursor: pointer; }
         .nav-right button:hover { background: #1a4a8a; color: #c8c8d8; }
@@ -35,12 +35,14 @@
         .nav-hamburger { display: none; background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; padding: 4px 8px; }
         .nav-hamburger:hover { color: #e0e0e0; }
         @media (max-width: 640px) {
+            .nav { padding: 0 12px; }
+            .nav-left { gap: 12px; }
             .nav-links, .nav-right { display: none; }
             .nav-hamburger { display: block; }
-            .nav-links.open, .nav-right.open { display: flex; }
             .nav.mobile-open { flex-wrap: wrap; height: auto; padding-bottom: 12px; }
-            .nav.mobile-open .nav-links { display: flex; width: 100%; order: 3; padding-top: 8px; }
+            .nav.mobile-open .nav-links { display: flex; flex-direction: column; width: 100%; order: 3; padding-top: 8px; gap: 8px; }
             .nav.mobile-open .nav-right { display: flex; width: 100%; order: 4; padding-top: 8px; }
+            .nav.mobile-open .nav-right input { flex: 1 1 0; width: auto; min-width: 0; }
         }
         .container {
             max-width: 480px;
