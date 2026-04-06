@@ -308,18 +308,26 @@
         }
         .footer a { color: #666; }
 
+        /* === HAMBURGER === */
+        .nav-hamburger { display: none; background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; padding: 4px 8px; }
+        .nav-hamburger:hover { color: #e0e0e0; }
+
         /* === RESPONSIVE === */
         @media (max-width: 768px) {
             .feature { flex-direction: column !important; gap: 24px; }
             .feature-media { order: -1; }
-            .nav-right { display: none; }
+            .nav-links, .nav-right { display: none; }
+            .nav-hamburger { display: block; }
+            .nav.mobile-open { flex-wrap: wrap; height: auto; padding-bottom: 12px; }
+            .nav.mobile-open .nav-links { display: flex; width: 100%; order: 3; padding-top: 8px; }
+            .nav.mobile-open .nav-right { display: flex; width: 100%; order: 4; padding-top: 8px; flex-wrap: wrap; }
         }
     </style>
 </head>
 <body>
 
 <!-- NAV -->
-<nav class="nav">
+<nav class="nav" id="mainNav">
     <div class="nav-left">
         <a href="/" class="nav-logo">MTGA+</a>
         <div class="nav-links">
@@ -328,6 +336,7 @@
             <a href="https://discord.gg/PuPfnb9RrH" target="_blank">Discord</a>
         </div>
     </div>
+    <button class="nav-hamburger" onclick="document.getElementById('mainNav').classList.toggle('mobile-open')">&#9776;</button>
     <div class="nav-right">
         <label>Username:</label>
         <input type="text" id="savedUsername" placeholder="Name#12345" autocomplete="off">

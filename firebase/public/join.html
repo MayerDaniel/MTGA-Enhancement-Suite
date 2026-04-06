@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>MTGA Enhancement Suite — Join Lobby</title>
+    <title>MTGA+ - Join Lobby</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -16,6 +16,31 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            padding-top: 56px;
+        }
+        /* NAV */
+        .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; height: 56px; background: rgba(22,33,62,0.92); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(233,69,96,0.15); }
+        .nav-left { display: flex; align-items: center; gap: 28px; }
+        .nav-logo { font-size: 1.3rem; font-weight: 800; color: #e94560; letter-spacing: 1px; text-decoration: none; }
+        .nav-links { display: flex; gap: 20px; }
+        .nav-links a { color: #888; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; text-decoration: none; }
+        .nav-links a:hover { color: #e0e0e0; }
+        .nav-right { display: flex; align-items: center; gap: 8px; }
+        .nav-right label { font-size: 0.78rem; color: #555; }
+        .nav-right input { padding: 5px 10px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #c8c8d8; font-size: 0.8rem; width: 160px; outline: none; }
+        .nav-right input:focus { border-color: #e94560; }
+        .nav-right button { padding: 5px 10px; background: #0f3460; color: #888; border: 1px solid #0f3460; border-radius: 4px; font-size: 0.75rem; cursor: pointer; }
+        .nav-right button:hover { background: #1a4a8a; color: #c8c8d8; }
+        .nav-saved { color: #4caf50; font-size: 0.75rem; display: none; }
+        .nav-hamburger { display: none; background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; padding: 4px 8px; }
+        .nav-hamburger:hover { color: #e0e0e0; }
+        @media (max-width: 640px) {
+            .nav-links, .nav-right { display: none; }
+            .nav-hamburger { display: block; }
+            .nav-links.open, .nav-right.open { display: flex; }
+            .nav.mobile-open { flex-wrap: wrap; height: auto; padding-bottom: 12px; }
+            .nav.mobile-open .nav-links { display: flex; width: 100%; order: 3; padding-top: 8px; }
+            .nav.mobile-open .nav-right { display: flex; width: 100%; order: 4; padding-top: 8px; }
         }
         .container {
             max-width: 480px;
@@ -110,9 +135,11 @@
         .join-request-form {
             display: flex;
             gap: 8px;
+            flex-wrap: wrap;
         }
         .join-request-form input {
-            flex: 1;
+            flex: 1 1 0;
+            min-width: 0;
             padding: 10px 12px;
             border: 1px solid #0f3460;
             border-radius: 6px;
@@ -120,6 +147,10 @@
             color: #e0e0e0;
             font-size: 0.9rem;
             outline: none;
+        }
+        @media (max-width: 400px) {
+            .join-request-form { flex-direction: column; }
+            .join-request-form button { width: 100%; }
         }
         .join-request-form input:focus {
             border-color: #e94560;
@@ -154,9 +185,22 @@
     </style>
 </head>
 <body>
+<nav class="nav" id="mainNav">
+    <div class="nav-left">
+        <a href="/" class="nav-logo">MTGA+</a>
+        <div class="nav-links"><a href="/lobbies">Lobbies</a><a href="https://github.com/MayerDaniel/MTGA-Enhancement-Suite" target="_blank">GitHub</a><a href="https://discord.gg/PuPfnb9RrH" target="_blank">Discord</a></div>
+    </div>
+    <button class="nav-hamburger" onclick="document.getElementById('mainNav').classList.toggle('mobile-open')">&#9776;</button>
+    <div class="nav-right">
+        <label>Username:</label>
+        <input type="text" id="navUsername" placeholder="Name#12345" autocomplete="off">
+        <button onclick="saveNavUsername()">Save</button>
+        <span class="nav-saved" id="navSavedMsg">Saved!</span>
+    </div>
+</nav>
     <div class="container">
-        <h1>MTGA Enhancement Suite</h1>
-        <p class="subtitle">Custom formats, lobby browser & more for MTG Arena</p>
+        <h1>MTGA+</h1>
+        <p class="subtitle">Companion app for MTG Arena</p>
 
         <div class="status" id="status">
             <span class="spinner"></span>
@@ -200,6 +244,20 @@
         var savedUser = localStorage.getItem('mtgaes_username');
         if (savedUser) {
             document.getElementById('usernameInput').value = savedUser;
+            var navInput = document.getElementById('navUsername');
+            if (navInput) navInput.value = savedUser;
+        }
+
+        // Nav username save
+        function saveNavUsername() {
+            var val = document.getElementById('navUsername').value.trim();
+            if (val && /^.+#\d+$/.test(val)) {
+                localStorage.setItem('mtgaes_username', val);
+                document.getElementById('usernameInput').value = val;
+                var msg = document.getElementById('navSavedMsg');
+                msg.style.display = 'inline';
+                setTimeout(function() { msg.style.display = 'none'; }, 2000);
+            } else if (val) { alert('Invalid format. Use Name#12345'); }
         }
 
         // Show lobby details

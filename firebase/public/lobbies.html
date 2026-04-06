@@ -212,17 +212,24 @@
         .info-bar a { color: #e94560; text-decoration: none; }
         .info-bar a:hover { text-decoration: underline; }
 
+        .header-hamburger { display: none; background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; padding: 4px 8px; }
+        .header-hamburger:hover { color: #e0e0e0; }
+
         @media (max-width: 640px) {
             .lobby-row { flex-wrap: wrap; gap: 8px; }
             .lobby-host { flex: 1 1 100%; }
             .lobby-format, .lobby-bestof { flex: 1; }
             .lobby-actions { flex: 1 1 100%; justify-content: flex-start; }
-            .header { flex-direction: column; gap: 12px; }
+            .header-links, .username-bar { display: none; }
+            .header-hamburger { display: block; }
+            .header.mobile-open { flex-wrap: wrap; height: auto; padding-bottom: 12px; }
+            .header.mobile-open .header-links { display: flex; width: 100%; order: 3; padding-top: 8px; }
+            .header.mobile-open .username-bar { display: flex; width: 100%; order: 4; padding-top: 8px; flex-wrap: wrap; }
         }
     </style>
 </head>
 <body>
-    <div class="header">
+    <div class="header" id="mainNav">
         <div class="header-left">
             <a href="/" class="header-logo">MTGA+</a>
             <div class="header-links">
@@ -231,6 +238,7 @@
                 <a href="https://discord.gg/PuPfnb9RrH" target="_blank">Discord</a>
             </div>
         </div>
+        <button class="header-hamburger" onclick="document.getElementById('mainNav').classList.toggle('mobile-open')">&#9776;</button>
         <div class="username-bar">
             <label>Username:</label>
             <input type="text" id="savedUsername" placeholder="Name#12345" autocomplete="off">
