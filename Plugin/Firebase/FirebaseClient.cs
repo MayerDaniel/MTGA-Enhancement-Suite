@@ -287,11 +287,55 @@ namespace MTGAEnhancementSuite.Firebase
 
                 yield return request.SendWebRequest();
 
-                var success = request.responseCode == 200;
-                if (!success)
-                    HandleApiError("Patch Lobby", request);
+                if (request.responseCode == 200)
+                {
+                    callback?.Invoke(true);
+                    yield break;
+                }
 
-                callback?.Invoke(success);
+                // On 401, refresh token and retry once
+                if (request.responseCode == 401 || request.responseCode == 403)
+                {
+                    Plugin.Log.LogWarning($"Patch Lobby: Auth expired (HTTP {request.responseCode}), refreshing and retrying...");
+                    _isAuthenticated = false;
+                    _idToken = null;
+
+                    bool refreshDone = false;
+                    RefreshTokenIfNeeded(() => { refreshDone = true; });
+                    while (!refreshDone) yield return null;
+
+                    if (!_isAuthenticated || string.IsNullOrEmpty(_idToken))
+                    {
+                        Plugin.Log.LogError("Patch Lobby: Token refresh failed, aborting");
+                        callback?.Invoke(false);
+                        yield break;
+                    }
+
+                    Plugin.Log.LogInfo("Patch Lobby: Token refreshed, retrying...");
+                    var retryUrl = $"{baseUrl}/lobbies/{challengeId}.json?auth={_idToken}";
+
+                    using (var retry = new UnityWebRequest(retryUrl, "PATCH"))
+                    {
+                        retry.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(jsonFields));
+                        retry.downloadHandler = new DownloadHandlerBuffer();
+                        retry.SetRequestHeader("Content-Type", "application/json");
+
+                        yield return retry.SendWebRequest();
+
+                        var retrySuccess = retry.responseCode == 200;
+                        if (!retrySuccess)
+                            Plugin.Log.LogError($"Patch Lobby retry failed: HTTP {retry.responseCode}: {retry.downloadHandler?.text}");
+                        else
+                            Plugin.Log.LogInfo("Patch Lobby retry succeeded");
+
+                        callback?.Invoke(retrySuccess);
+                    }
+                    yield break;
+                }
+
+                // Other errors
+                HandleApiError("Patch Lobby", request);
+                callback?.Invoke(false);
             }
         }
 
