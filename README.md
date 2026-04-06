@@ -38,6 +38,71 @@ Both methods will:
 
 > **Note:** The bootstrapper handles auto-updates. Future updates will be downloaded automatically and applied on next restart.
 
+## Installation (Linux)
+### 1. Install BepInEx (Windows x64)
+   + Download the Windows x64 version of BepInEx (do NOT use Linux or x86 builds).
+   + Extract all contents into the MTGA installation directory: `~/.../steamapps/common/MTGA/`
+
+After extraction, the directory should include:
++ `MTGA.exe`
++ `winhttp.dll`
++ `doorstop_config.ini`
++ `BepInEx/`
+
+✅ -- Ensure `winhttp.dll` exists — this is required for injection.
+
+### 2. Configure Steam Launch Options
+In Steam:
+
+> Properties → General → Launch Options
+
+Add:
+
+`WINEDLLOVERRIDES="winhttp=n,b" %command%`
+
+This is required to allow BepInEx/UnityDoorstop to hook correctly under Proton.
+
+
+### 3. First Launch (Initialize BepInEx)
+
+Launch the game once, then exit.
+
+This allows BepInEx to generate its folder structure.
+
+
+### 4. Install MTGA+
+
+Place the MTGA+ plugin files into:
+
+`BepInEx/plugins/MTGAEnhancementSuite/`
+
+Files should include:
++ provided `.dll` files
++ `config.json` (from the MTGA+ release)
+
+
+### 5. Launch the Game
+
+Restart the game via Steam.
+
+If everything is set up correctly:
+
++ BepInEx will load
++ MTGA+ will initialize
++ Mod functionality should be available in-game
+
+
+### Notes / Troubleshooting
+
+The error:
+
+`...not compiled for x86 or x64 (might be ARM?)`
+
+can occur under Proton but does not necessarily indicate an architecture issue.
+
+Using the correct `winhttp.dll` and setting WINEDLLOVERRIDES launch option command resolves this.
+Ensure you are using a working Proton version (Proton Experimental or recent stable versions recommended).
+
 ## Features
 
 ### Custom Format Lobbies
