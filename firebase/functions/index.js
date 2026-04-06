@@ -557,54 +557,72 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
 });
 
 /**
- * Cleans up stale lobbies every 30 minutes.
- * Deletes any lobby with lastHeartbeat older than 5 minutes.
+ * Expires Discord messages for lobbies with stale heartbeats.
+ * Runs every 2 minutes. Does NOT delete the lobby itself — just edits
+ * the Discord messages to "Lobby Closed" so they match the in-game
+ * browser's 2-minute staleness filter.
  */
-exports.cleanStaleLobbies = onScheduleV2(
-  { schedule: "*/5 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
+exports.expireStaleDiscordMessages = onScheduleV2(
+  { schedule: "*/2 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
   async (event) => {
     const now = Math.floor(Date.now() / 1000);
-    const staleThreshold = now - 3600; // 60 minutes — must outlast Bo3 matches
+    const staleThreshold = now - 120; // 2 minutes — matches in-game browser filter
 
     const lobbiesSnap = await admin.database().ref("lobbies").once("value");
     if (!lobbiesSnap.exists()) return;
 
     const lobbies = lobbiesSnap.val();
-    const staleIds = [];
-
-    for (const [id, lobby] of Object.entries(lobbies)) {
-      const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
-      if (lastHeartbeat < staleThreshold) {
-        staleIds.push(id);
-      }
-    }
-
-    if (staleIds.length === 0) return;
-
-    // Expire Discord messages before deleting lobbies
     const secrets = {
       general: discordWebhookUrl.value(),
       planar: discordPlanarStdWebhookUrl.value(),
       pauper: discordPauperWebhookUrl.value(),
     };
 
-    for (const id of staleIds) {
-      const lobby = lobbies[id];
-      if (lobby.discordMessages) {
-        console.log(`Expiring Discord messages for stale lobby ${id}`);
-        try {
-          await expireDiscordMessages(id, lobby, secrets);
-        } catch (err) {
-          console.error(`Failed to expire messages for ${id}: ${err.message}`);
-        }
+    for (const [id, lobby] of Object.entries(lobbies)) {
+      if (!lobby.discordMessages) continue;
+
+      const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
+      if (lastHeartbeat >= staleThreshold) continue; // still fresh
+
+      console.log(`Expiring Discord messages for stale lobby ${id} (heartbeat ${now - lastHeartbeat}s ago)`);
+      try {
+        await expireDiscordMessages(id, lobby, secrets);
+      } catch (err) {
+        console.error(`Failed to expire messages for ${id}: ${err.message}`);
       }
-      console.log(`Deleting stale lobby ${id} (last heartbeat: ${lobby.lastHeartbeat || lobby.createdAt || 0})`);
+    }
+  }
+);
+
+/**
+ * Cleans up stale lobbies every 30 minutes.
+ * Deletes any lobby with lastHeartbeat older than 5 minutes.
+ * Discord messages are already handled by expireStaleDiscordMessages.
+ */
+exports.cleanStaleLobbies = onScheduleV2(
+  { schedule: "*/30 * * * *", timeZone: "UTC" },
+  async (event) => {
+    const now = Math.floor(Date.now() / 1000);
+    const staleThreshold = now - 300; // 5 minutes
+
+    const lobbiesSnap = await admin.database().ref("lobbies").once("value");
+    if (!lobbiesSnap.exists()) return;
+
+    const lobbies = lobbiesSnap.val();
+    const deletions = [];
+
+    for (const [id, lobby] of Object.entries(lobbies)) {
+      const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
+      if (lastHeartbeat < staleThreshold) {
+        deletions.push(admin.database().ref(`lobbies/${id}`).remove());
+        console.log(`Deleting stale lobby ${id} (last heartbeat: ${lastHeartbeat})`);
+      }
     }
 
-    // Delete all stale lobbies
-    const deletions = staleIds.map(id => admin.database().ref(`lobbies/${id}`).remove());
-    await Promise.all(deletions);
-    console.log(`Cleaned up ${staleIds.length} stale lobbies`);
+    if (deletions.length > 0) {
+      await Promise.all(deletions);
+      console.log(`Cleaned up ${deletions.length} stale lobbies`);
+    }
   }
 );
 
