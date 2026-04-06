@@ -561,7 +561,7 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
  * Deletes any lobby with lastHeartbeat older than 5 minutes.
  */
 exports.cleanStaleLobbies = onScheduleV2(
-  { schedule: "*/30 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
+  { schedule: "*/5 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
   async (event) => {
     const now = Math.floor(Date.now() / 1000);
     const staleThreshold = now - 300; // 5 minutes
