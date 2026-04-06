@@ -564,7 +564,7 @@ exports.cleanStaleLobbies = onScheduleV2(
   { schedule: "*/5 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
   async (event) => {
     const now = Math.floor(Date.now() / 1000);
-    const staleThreshold = now - 150; // 2.5 minutes
+    const staleThreshold = now - 3600; // 60 minutes — must outlast Bo3 matches
 
     const lobbiesSnap = await admin.database().ref("lobbies").once("value");
     if (!lobbiesSnap.exists()) return;
