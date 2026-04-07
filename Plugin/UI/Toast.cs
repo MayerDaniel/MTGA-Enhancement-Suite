@@ -48,14 +48,14 @@ namespace MTGAEnhancementSuite.UI
 
             _canvasRoot.AddComponent<GraphicRaycaster>();
 
-            // Container anchored to top-right
+            // Container anchored to top-left
             var containerObj = new GameObject("ToastContainer");
             containerObj.transform.SetParent(_canvasRoot.transform, false);
             _toastContainer = containerObj.AddComponent<RectTransform>();
-            _toastContainer.anchorMin = new Vector2(1f, 1f);
-            _toastContainer.anchorMax = new Vector2(1f, 1f);
-            _toastContainer.pivot = new Vector2(1f, 1f);
-            _toastContainer.anchoredPosition = new Vector2(-20f, -TopOffset);
+            _toastContainer.anchorMin = new Vector2(0f, 1f);
+            _toastContainer.anchorMax = new Vector2(0f, 1f);
+            _toastContainer.pivot = new Vector2(0f, 1f);
+            _toastContainer.anchoredPosition = new Vector2(20f, -TopOffset);
             _toastContainer.sizeDelta = new Vector2(ToastWidth, 0);
 
             _instance = _canvasRoot.AddComponent<Toast>();
@@ -80,8 +80,8 @@ namespace MTGAEnhancementSuite.UI
             // Shift existing toasts down
             ShiftExistingToasts(rect.sizeDelta.y + 8f);
 
-            // Start off-screen to the right
-            var startPos = new Vector2(ToastWidth + 20f, 0f);
+            // Start off-screen to the left
+            var startPos = new Vector2(-(ToastWidth + 20f), 0f);
             var endPos = Vector2.zero;
             rect.anchoredPosition = startPos;
             canvasGroup.alpha = 0f;
@@ -105,7 +105,7 @@ namespace MTGAEnhancementSuite.UI
             // Slide out
             elapsed = 0f;
             startPos = rect.anchoredPosition;
-            var outPos = new Vector2(ToastWidth + 20f, startPos.y);
+            var outPos = new Vector2(-(ToastWidth + 20f), startPos.y);
             while (elapsed < SlideOutDuration)
             {
                 elapsed += Time.unscaledDeltaTime;
@@ -138,9 +138,9 @@ namespace MTGAEnhancementSuite.UI
             toast.transform.SetParent(_toastContainer, false);
 
             var rect = toast.AddComponent<RectTransform>();
-            rect.anchorMin = new Vector2(1f, 1f);
-            rect.anchorMax = new Vector2(1f, 1f);
-            rect.pivot = new Vector2(1f, 1f);
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
             rect.sizeDelta = new Vector2(ToastWidth, 0); // Height set after text layout
 
             var canvasGroup = toast.AddComponent<CanvasGroup>();
