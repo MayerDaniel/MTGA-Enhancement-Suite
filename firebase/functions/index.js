@@ -226,14 +226,20 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCom
     }
   }
 
-  console.log(`Fetched ${totalFetched} unique cards, ${arenaIdCount} arena_ids, ${Object.keys(legalNames).length} name entries`);
+  // Compute unique card count (independent of prints vs cards mode)
+  const uniqueCards = filterCommonPrints
+    ? namesWithCommonPrint.size
+    : Object.keys(legalNames).filter(n => !n.includes("%2F")).length;
+
+  console.log(`Fetched ${totalFetched} ${filterCommonPrints ? "prints" : "cards"}, ${uniqueCards} unique cards, ${arenaIdCount} arena_ids, ${Object.keys(legalNames).length} name entries`);
 
   // Write to Firebase in one batch
   const update = {
     legalArenaIds,
     legalNames,
     lastSync: admin.database.ServerValue.TIMESTAMP,
-    totalCards: totalFetched,
+    totalCards: uniqueCards,
+    totalPrints: totalFetched,
     totalArenaIds: arenaIdCount,
     totalNames: Object.keys(legalNames).length,
   };
@@ -242,7 +248,8 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCom
 
   const result = {
     format,
-    totalCards: totalFetched,
+    totalCards: uniqueCards,
+    totalPrints: totalFetched,
     syncedAt: new Date().toISOString(),
   };
 
