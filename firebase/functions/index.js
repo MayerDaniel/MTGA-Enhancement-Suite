@@ -26,8 +26,8 @@ const FORMAT_REGISTRY = {
   // Scryfall is missing some Arena-only common printings (e.g. Final Fantasy set).
   // Do NOT add historicpauper back to this registry — it will overwrite the correct local data.
   // historicpauper: { ... },
-  standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard (set:tmt OR set:ecl OR set:tla OR set:spm OR set:om1 OR set:eoe OR set:fin OR set:tdm OR set:dft OR set:dsk OR set:blb OR set:otj OR set:mkm OR set:lci OR set:woe OR set:fdn)', rawQuery: true, filterCommonPrints: true },
-  planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn) -name:"Cori-steel Cutter"', rawQuery: true },
+  standardpauper:     { displayName: "Standard Pauper",       scryfallQuery: '(game:arena) legal:standard', rawQuery: true, filterCommonPrints: true },
+  planarstandard:     { displayName: "Planar Standard",       scryfallQuery: 'game:paper (set:ecl or set:eoe or set:tdm or set:dft or set:fdn or set:sos) -name:"Cori-steel Cutter"', rawQuery: true },
   modern:             { displayName: "Modern",                scryfallQuery: "legal:modern" },
 };
 
