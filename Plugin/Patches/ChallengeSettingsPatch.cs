@@ -200,27 +200,15 @@ namespace MTGAEnhancementSuite.Patches
             float newY = sourceRect.anchoredPosition.y - sourceRect.sizeDelta.y;
             cloneRect.anchoredPosition = new Vector2(sourceRect.anchoredPosition.x, newY);
 
-            // Canvas override to render on top
-            var canvas = clone.AddComponent<Canvas>();
-            canvas.overrideSorting = true;
-            canvas.sortingOrder = 50;
-            clone.AddComponent<GraphicRaycaster>();
-
-            // Permanent background, disable animator
-            for (int i = 0; i < clone.transform.childCount; i++)
-            {
-                var child = clone.transform.GetChild(i);
-                var n = child.name.ToLower();
-                if (n.Contains("background") || n.Contains("highlight") || n.Contains("gradient"))
-                {
-                    child.gameObject.SetActive(true);
-                    var img = child.GetComponent<Image>();
-                    if (img != null) img.color = new Color(0f, 0f, 0f, 0.5f);
-                }
-            }
-
+            // Hide ALL spinner visuals — the clone is now purely a hidden state holder
+            // (we still call its SelectOption / ValueIndex to drive selection). The
+            // visible UI is a fresh combobox sibling below.
             var animator = clone.GetComponent<Animator>();
             if (animator != null) animator.enabled = false;
+            for (int i = 0; i < clone.transform.childCount; i++)
+            {
+                clone.transform.GetChild(i).gameObject.SetActive(false);
+            }
 
             foreach (var loc in clone.GetComponentsInChildren<Wotc.Mtga.Loc.Localize>(true))
                 UnityEngine.Object.Destroy(loc);
@@ -228,30 +216,29 @@ namespace MTGAEnhancementSuite.Patches
             spinner = clone.GetComponent<Spinner_OptionSelector>();
             if (spinner == null) return;
 
-            // Disable the spinner's prev/next button functionality — we replace
-            // it with a click-to-open dropdown. We hide the arrow buttons but
-            // keep the spinner alive (it preserves layout, sizing, and lets us
-            // call SelectOption(index) to update the value label after a pick).
             spinner.onValueChanged.RemoveAllListeners();
             spinner.ClearOptions();
             spinner.AddOptions(new List<string>(ChallengeFormatState.FormatOptions));
 
-            HideSpinnerArrows(clone.transform);
+            // Build a fresh inline combobox in the same parent at the spinner's
+            // position. The combobox calls spinner.SelectOption(idx) so the
+            // existing onValueChanged path drives all format-change side effects.
+            UI.FormatComboBox.Mount(parent, cloneRect, spinner);
 
-            // Make the whole spinner clickable as a single button that opens
-            // the searchable game-mode picker.
-            ConvertSpinnerToDropdownButton(clone, spinner, parent, widget);
-
-            // Wire the underlying spinner's onValueChanged so when the picker
-            // calls SelectOption(idx), all the existing format-change side
-            // effects (Firebase push, deck clear, matchType, button visibility)
-            // run through the same path as before.
+            // Wire the underlying spinner's onValueChanged: this is THE
+            // canonical "format selection changed" path. The combobox triggers
+            // it via spinner.SelectOption(idx).
             var widgetRef = widget;
             spinner.onValueChanged.AddListener(new UnityAction<int, string>((index, value) =>
             {
+                if (index < 0 || index >= ChallengeFormatState.FormatKeys.Length) return;
+
+                // Always keep the visible combobox in sync with the selection,
+                // including for joiner SSE updates and post-match restores.
+                UI.FormatComboBox.SyncDisplay(index);
+
                 if (ChallengeFormatState.IsJoining) return;
 
-                if (index < 0 || index >= ChallengeFormatState.FormatKeys.Length) return;
                 ChallengeFormatState.SelectedFormat = ChallengeFormatState.FormatKeys[index];
                 Plugin.Log.LogInfo($"Format changed to: {ChallengeFormatState.SelectedFormat}");
                 PerPlayerLog.Info($"Format changed to: {ChallengeFormatState.SelectedFormat} (ActiveChallengeId={ChallengeFormatState.ActiveChallengeId}, IsJoining={ChallengeFormatState.IsJoining})");
@@ -410,30 +397,18 @@ namespace MTGAEnhancementSuite.Patches
 
         private static void ApplyFormatSpinnerState(Spinner_OptionSelector spinner, UnifiedChallengeBladeWidget widget)
         {
-            // If joining, lock to the specified format
+            // Lock the combobox if joining — joiners see the host's format read-only.
+            UI.FormatComboBox.SetLocked(ChallengeFormatState.IsJoining);
+
             if (ChallengeFormatState.IsJoining)
             {
                 int formatIndex = Array.IndexOf(ChallengeFormatState.FormatKeys, ChallengeFormatState.SelectedFormat);
                 if (formatIndex < 0) formatIndex = 0;
                 spinner.SelectOption(formatIndex);
+                UI.FormatComboBox.SyncDisplay(formatIndex);
 
-                // Disable the arrow buttons to prevent changes
-                var nextBtn = AccessTools.Field(typeof(Spinner_OptionSelector), "_buttonNextValue");
-                var prevBtn = AccessTools.Field(typeof(Spinner_OptionSelector), "_buttonPreviousValue");
-                if (nextBtn != null)
-                {
-                    var next = nextBtn.GetValue(spinner) as CustomButton;
-                    if (next != null) next.Interactable = false;
-                }
-                if (prevBtn != null)
-                {
-                    var prev = prevBtn.GetValue(spinner) as CustomButton;
-                    if (prev != null) prev.Interactable = false;
-                }
+                Plugin.Log.LogInfo($"Format dropdown locked to {ChallengeFormatState.SelectedFormat} (joining)");
 
-                Plugin.Log.LogInfo($"Format spinner locked to {ChallengeFormatState.SelectedFormat} (joining)");
-
-                // Ensure auth is valid, then fetch current format and start SSE listener
                 FirebaseClient.Instance.RefreshTokenIfNeeded(() =>
                 {
                     if (!FirebaseClient.Instance.IsAuthenticated)
@@ -441,50 +416,32 @@ namespace MTGAEnhancementSuite.Patches
                         Plugin.Log.LogWarning("Cannot start format sync — auth failed");
                         return;
                     }
-
-                    // Fetch the current lobby state from Firebase (catches any changes made
-                    // while we were in the match or before SSE connects)
                     FetchCurrentLobbyFormat(spinner, widget);
-
-                    // Start SSE listener to track host format changes going forward
                     StartSseListener(spinner, widget);
                 });
             }
             else
             {
-                // If returning from match with a format already set, restore it
                 if (ChallengeFormatState.HasFormat)
                 {
                     int idx = Array.IndexOf(ChallengeFormatState.FormatKeys, ChallengeFormatState.SelectedFormat);
-                    if (idx >= 0) spinner.SelectOption(idx);
-                    Plugin.Log.LogInfo($"Format spinner restored to {ChallengeFormatState.SelectedFormat}");
-
-                    // Re-enable arrow buttons (host can change)
-                    var nextBtn = AccessTools.Field(typeof(Spinner_OptionSelector), "_buttonNextValue");
-                    var prevBtn = AccessTools.Field(typeof(Spinner_OptionSelector), "_buttonPreviousValue");
-                    if (nextBtn != null)
+                    if (idx >= 0)
                     {
-                        var next = nextBtn.GetValue(spinner) as CustomButton;
-                        if (next != null) next.Interactable = true;
+                        spinner.SelectOption(idx);
+                        UI.FormatComboBox.SyncDisplay(idx);
                     }
-                    if (prevBtn != null)
-                    {
-                        var prev = prevBtn.GetValue(spinner) as CustomButton;
-                        if (prev != null) prev.Interactable = true;
-                    }
+                    Plugin.Log.LogInfo($"Format dropdown restored to {ChallengeFormatState.SelectedFormat}");
                 }
                 else
                 {
                     spinner.SelectOption(0);
+                    UI.FormatComboBox.SyncDisplay(0);
                     ChallengeFormatState.SelectedFormat = "none";
                 }
             }
 
-            // Store references for SSE callbacks
             _currentSpinnerRef = new WeakReference(spinner);
             _currentWidgetRef = new WeakReference(widget);
-
-            Plugin.Log.LogInfo("Format spinner injected");
         }
 
         private static void InjectButtons(UnifiedChallengeBladeWidget widget)
