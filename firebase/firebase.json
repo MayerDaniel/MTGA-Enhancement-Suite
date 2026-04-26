@@ -23,6 +23,10 @@
       {
         "source": "/lobbies",
         "destination": "/lobbies.html"
+      },
+      {
+        "source": "/gamemodes",
+        "destination": "/gamemodes.html"
       }
     ]
   }

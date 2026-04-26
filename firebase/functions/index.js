@@ -424,8 +424,16 @@ exports.getAuthToken = onRequest({ cors: true }, async (req, res) => {
 });
 
 /**
- * Validates a deck against the stored legal cards list for a lobby's format.
- * Checks arena_ids against /formats/{format}/legalArenaIds, falls back to legalNames.
+ * Validates a deck against a game mode's legality cache and post-processing rules.
+ *
+ * Body: {
+ *   challengeId, gameModeId? (or legacy `format`),
+ *   decklist: [{ grpId, name, quantity, rarityValue, isSideboard }]
+ * }
+ *
+ * Returns:
+ *   - { valid: true } on success
+ *   - { valid: false, format/gameModeId, violations: [{ type, message, cards }] }
  */
 exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
   if (req.method !== "POST") {
@@ -433,7 +441,7 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     return;
   }
 
-  const { challengeId, format: bodyFormat, decklist } = req.body;
+  const { challengeId, gameModeId: bodyGameModeId, format: bodyFormat, decklist } = req.body;
 
   if (!decklist || !Array.isArray(decklist)) {
     res.status(400).json({ error: "Missing decklist array" });
@@ -442,62 +450,63 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
 
   const env = envFromReq(req);
 
-  // Format can come from the request body directly, or looked up from the lobby
-  let format = bodyFormat;
-  if (!format && challengeId) {
+  // Resolve mode ID. Prefer gameModeId; fall back to legacy `format` field.
+  let modeId = bodyGameModeId || bodyFormat || null;
+  if (!modeId && challengeId) {
     const lobbySnap = await admin
       .database()
       .ref(scopePath(env, `lobbies/${challengeId}`))
       .once("value");
-
     if (lobbySnap.exists()) {
-      format = lobbySnap.val().format;
+      const lobby = lobbySnap.val();
+      modeId = lobby.gameModeId || lobby.format || null;
     }
   }
 
-  if (!format) {
-    res.status(400).json({ error: "No format specified and no lobby found" });
-    return;
-  }
-
-  if (!format || format === "none") {
+  if (!modeId || modeId === "none") {
     res.json({ valid: true });
     return;
   }
 
-  // Get the legal arena IDs and name fallbacks for this format
-  const [idsSnap, namesSnap] = await Promise.all([
-    admin.database().ref(scopePath(env, `formats/${format}/legalArenaIds`)).once("value"),
-    admin.database().ref(scopePath(env, `formats/${format}/legalNames`)).once("value"),
+  // Try the new gameMode + legalityCache path first
+  let mode = null;
+  let legalArenaIds = null;
+  let legalNames = null;
+  const [modeSnap, cacheSnap] = await Promise.all([
+    admin.database().ref(scopePath(env, `gameModes/${modeId}`)).once("value"),
+    admin.database().ref(scopePath(env, `legalityCache/${modeId}`)).once("value"),
   ]);
-
-  if (!idsSnap.exists() && !namesSnap.exists()) {
-    res.status(500).json({
-      error: `Legal cards list for ${format} not synced yet. Run syncFormatsHttp first.`,
-    });
-    return;
+  if (modeSnap.exists() && cacheSnap.exists()) {
+    mode = modeSnap.val();
+    const c = cacheSnap.val();
+    legalArenaIds = c.legalArenaIds || {};
+    legalNames = c.legalNames || {};
+  } else {
+    // Legacy fallback: read /formats/{modeId}
+    const [idsSnap, namesSnap] = await Promise.all([
+      admin.database().ref(scopePath(env, `formats/${modeId}/legalArenaIds`)).once("value"),
+      admin.database().ref(scopePath(env, `formats/${modeId}/legalNames`)).once("value"),
+    ]);
+    if (!idsSnap.exists() && !namesSnap.exists()) {
+      res.status(500).json({
+        error: `Legal cards for ${modeId} not synced. Define a game mode at /gamemodes or run syncFormatsHttp.`,
+      });
+      return;
+    }
+    legalArenaIds = idsSnap.val() || {};
+    legalNames = namesSnap.val() || {};
   }
 
-  const legalArenaIds = idsSnap.val() || {};
-  const legalNames = namesSnap.val() || {};
-
+  // --- Step 1: legality (per-card arena_id then name fallback) ---
   const illegalCards = [];
-
   for (const card of decklist) {
     const arenaId = String(card.grpId);
-
-    // Skip basic lands (rarity 1)
-    if (card.rarityValue === 1) continue;
-
-    // Primary: check arena_id
+    if (card.rarityValue === 1) continue; // basic land
     if (legalArenaIds[arenaId]) continue;
-
-    // Fallback: check card name (for cards without arena_id)
     if (card.name) {
       const encodedName = encodeFirebaseKey(card.name.toLowerCase());
       if (legalNames[encodedName]) continue;
     }
-
     illegalCards.push({
       grpId: card.grpId,
       name: card.name,
@@ -506,16 +515,151 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     });
   }
 
-  if (illegalCards.length === 0) {
+  const violations = [];
+  if (illegalCards.length > 0) {
+    violations.push({
+      type: "illegalCards",
+      message: `${illegalCards.length} card(s) not legal in ${modeId}`,
+      cards: illegalCards,
+    });
+  }
+
+  // --- Step 2: post-processing rules (rarity caps, deck size, singletons) ---
+  if (mode && mode.postProcessing) {
+    const postViolations = applyPostProcessingRules(decklist, mode.postProcessing);
+    violations.push(...postViolations);
+  }
+
+  if (violations.length === 0) {
     res.json({ valid: true });
   } else {
     res.json({
       valid: false,
-      format,
-      illegalCards,
+      gameModeId: modeId,
+      format: modeId,            // legacy alias for older plugin builds
+      illegalCards,              // legacy field for older plugin builds
+      violations,
     });
   }
 });
+
+/**
+ * Applies post-processing rules (rarity caps, combined caps, singletons,
+ * deck-size constraints) to a decklist.
+ * Returns an array of violations.
+ *
+ * Decklist entries should include rarityValue (1-5) and isSideboard:bool.
+ */
+function applyPostProcessingRules(decklist, rules) {
+  const violations = [];
+  const RARITY_LABELS = { 1: "basic", 2: "common", 3: "uncommon", 4: "rare", 5: "mythic" };
+
+  // Aggregate counts per pile (main vs sideboard)
+  const mainCounts = { common: 0, uncommon: 0, rare: 0, mythic: 0, basic: 0 };
+  const sideCounts = { common: 0, uncommon: 0, rare: 0, mythic: 0, basic: 0 };
+  const totalCounts = { common: 0, uncommon: 0, rare: 0, mythic: 0, basic: 0 };
+  // Per-name-per-rarity counts (for maxEach + singleton checks)
+  const cardsByRarity = { common: {}, uncommon: {}, rare: {}, mythic: {}, basic: {} };
+  let mainSize = 0, sideSize = 0;
+
+  for (const card of decklist) {
+    const rarity = RARITY_LABELS[card.rarityValue] || "unknown";
+    const qty = Number(card.quantity || 0);
+    const target = card.isSideboard ? sideCounts : mainCounts;
+    if (target[rarity] !== undefined) target[rarity] += qty;
+    if (totalCounts[rarity] !== undefined) totalCounts[rarity] += qty;
+    if (card.isSideboard) sideSize += qty; else mainSize += qty;
+    if (cardsByRarity[rarity] && card.name) {
+      cardsByRarity[rarity][card.name] =
+        (cardsByRarity[rarity][card.name] || 0) + qty;
+    }
+  }
+
+  const scope = rules.sideboardScope || "combined"; // "combined" | "main" | "ignore"
+  function pickCounts(rarity) {
+    if (scope === "ignore") return mainCounts[rarity];
+    if (scope === "main")   return mainCounts[rarity];
+    return totalCounts[rarity]; // combined (default)
+  }
+
+  // Per-rarity caps
+  if (rules.rarityCaps) {
+    for (const [rarity, cap] of Object.entries(rules.rarityCaps)) {
+      if (!cap) continue;
+      const total = pickCounts(rarity);
+      if (cap.maxTotal !== undefined && total > cap.maxTotal) {
+        violations.push({
+          type: "rarityCapExceeded",
+          message: `Too many ${rarity}s (${total}/${cap.maxTotal})`,
+          rarity, total, cap: cap.maxTotal,
+        });
+      }
+      if (cap.maxEach !== undefined && cardsByRarity[rarity]) {
+        const offenders = Object.entries(cardsByRarity[rarity])
+          .filter(([_, qty]) => qty > cap.maxEach)
+          .map(([name, qty]) => ({ name, quantity: qty }));
+        if (offenders.length > 0) {
+          violations.push({
+            type: "maxEachExceeded",
+            message: `${rarity} cards must have at most ${cap.maxEach} copies`,
+            rarity, cap: cap.maxEach, cards: offenders,
+          });
+        }
+      }
+    }
+  }
+
+  // Combined-rarity caps (e.g. "rare + mythic <= 4")
+  if (Array.isArray(rules.combinedCaps)) {
+    for (const combo of rules.combinedCaps) {
+      const rarities = combo.rarities || [];
+      let total = 0;
+      for (const r of rarities) total += pickCounts(r);
+      if (combo.maxTotal !== undefined && total > combo.maxTotal) {
+        violations.push({
+          type: "combinedCapExceeded",
+          message: `Too many ${rarities.join("/")} (${total}/${combo.maxTotal})`,
+          rarities, total, cap: combo.maxTotal,
+        });
+      }
+      if (combo.maxEach !== undefined) {
+        const offenders = [];
+        for (const r of rarities) {
+          for (const [name, qty] of Object.entries(cardsByRarity[r] || {})) {
+            if (qty > combo.maxEach) offenders.push({ name, quantity: qty, rarity: r });
+          }
+        }
+        if (offenders.length > 0) {
+          violations.push({
+            type: "combinedMaxEachExceeded",
+            message: `${rarities.join("/")} cards must have at most ${combo.maxEach} copies`,
+            rarities, cap: combo.maxEach, cards: offenders,
+          });
+        }
+      }
+    }
+  }
+
+  // Deck size
+  if (rules.deckSize) {
+    if (rules.deckSize.min !== undefined && mainSize < rules.deckSize.min) {
+      violations.push({
+        type: "deckSizeBelowMin",
+        message: `Main deck has ${mainSize} cards, minimum ${rules.deckSize.min}`,
+        size: mainSize, min: rules.deckSize.min,
+      });
+    }
+    if (rules.deckSize.max !== undefined && mainSize > rules.deckSize.max) {
+      violations.push({
+        type: "deckSizeAboveMax",
+        message: `Main deck has ${mainSize} cards, maximum ${rules.deckSize.max}`,
+        size: mainSize, max: rules.deckSize.max,
+      });
+    }
+  }
+
+  return violations;
+}
 
 /**
  * Lists public lobbies for the web lobby browser.
@@ -1135,6 +1279,282 @@ exports.expireDiscordOnLobbyCloseStaging = onValueWritten(
   },
   (event) => handleExpireOnClose(event, "staging")
 );
+
+// ===========================================================================
+// Game modes (data-driven custom formats)
+// User-defined game modes are stored at /gameModes/{id}. The legality cache
+// (resolved arena IDs and names) is at /legalityCache/{id} so it can be
+// regenerated independently.
+//
+// Auth model: a shared secret is hashed client-side (SHA-256) and sent in
+// the X-MTGAES-Auth header. Cloud Functions verify the hash matches before
+// allowing create/update/delete.
+// ===========================================================================
+
+// SHA-256 of the gamemode editor password "TrustedGameModeCre@t0r!".
+// Anyone with the password can author game modes; this is a community-trust
+// model, not a security boundary.
+const GAMEMODE_AUTH_HASH =
+  "9f8d4ba22f518157fc671d9ba48c71b0afadd0d94ddd6f51ed7e0bd51fda240d";
+
+function checkGameModeAuth(req) {
+  const provided = (req.headers["x-mtgaes-auth"] || "").toString().toLowerCase().trim();
+  return provided === GAMEMODE_AUTH_HASH;
+}
+
+/**
+ * Lists all game modes (id + display name + minimal metadata).
+ * Public to authenticated users; full legality cache is fetched separately.
+ */
+exports.listGameModes = onRequest({ cors: true }, async (req, res) => {
+  const env = envFromReq(req);
+  const snap = await admin.database().ref(scopePath(env, "gameModes")).once("value");
+  const modes = snap.exists() ? snap.val() : {};
+  res.json({ env, modes });
+});
+
+/**
+ * Returns the list of card sets (with counts) and rarities, for the gamemodes
+ * editor UI. Public read — the underlying card metadata path is locked, so
+ * this endpoint is the only way for the website to access the data.
+ */
+exports.listCardSets = onRequest({ cors: true }, async (req, res) => {
+  const env = envFromReq(req);
+  const setsSnap = await admin.database().ref(scopePath(env, "cardMetadata/sets")).once("value");
+  const sets = setsSnap.exists() ? setsSnap.val() : [];
+  const verSnap = await admin.database().ref(scopePath(env, "cardMetadataVersion")).once("value");
+  const version = verSnap.exists() ? verSnap.val() : null;
+  res.json({
+    env,
+    sets,
+    rarities: ["basic", "common", "uncommon", "rare", "mythic"],
+    version,
+  });
+});
+
+/**
+ * Create or update a game mode.
+ * Body: { id, displayName, description, matchType, isBestOf3Default,
+ *         legalitySource, postProcessing }
+ * Header: X-MTGAES-Auth: <sha256 of password>
+ */
+exports.createGameMode = onRequest({ cors: true, memory: "1GiB", timeoutSeconds: 540 }, async (req, res) => {
+  if (req.method !== "POST" && req.method !== "PUT") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  if (!checkGameModeAuth(req)) {
+    res.status(401).json({ error: "Invalid or missing X-MTGAES-Auth header" });
+    return;
+  }
+
+  const env = envFromReq(req);
+  const body = req.body || {};
+  const validation = validateGameModeSchema(body);
+  if (validation.error) {
+    res.status(400).json({ error: validation.error });
+    return;
+  }
+
+  const id = body.id;
+  const now = Date.now();
+
+  // Look up existing mode to preserve createdAt/createdBy
+  const existingSnap = await admin.database().ref(scopePath(env, `gameModes/${id}`)).once("value");
+  const existing = existingSnap.exists() ? existingSnap.val() : null;
+
+  const mode = {
+    id,
+    displayName: body.displayName,
+    description: body.description || "",
+    matchType: body.matchType || "DirectGame",
+    isBestOf3Default: !!body.isBestOf3Default,
+    legalitySource: body.legalitySource,
+    postProcessing: body.postProcessing || null,
+    createdAt: existing?.createdAt || now,
+    createdBy: existing?.createdBy || (body.createdBy || "unknown"),
+    updatedAt: now,
+  };
+
+  // Resolve legality cache (the actual list of legal grpIds + names)
+  let cache;
+  try {
+    cache = await resolveLegalityCache(mode, env);
+  } catch (err) {
+    console.error(`createGameMode: legality resolution failed for ${id}: ${err.message}`);
+    res.status(500).json({ error: `Failed to resolve legality: ${err.message}` });
+    return;
+  }
+
+  await admin.database().ref(scopePath(env, `gameModes/${id}`)).set(mode);
+  await admin.database().ref(scopePath(env, `legalityCache/${id}`)).set({
+    legalArenaIds: cache.legalArenaIds,
+    legalNames: cache.legalNames,
+    totalCards: cache.totalCards,
+    syncedAt: now,
+  });
+
+  console.log(`[${env}] gameMode ${id} ${existing ? "updated" : "created"}: ${cache.totalCards} legal cards`);
+  res.json({ ok: true, env, mode, totalCards: cache.totalCards });
+});
+
+/**
+ * Delete a game mode.
+ * Header: X-MTGAES-Auth: <sha256 of password>
+ */
+exports.deleteGameMode = onRequest({ cors: true }, async (req, res) => {
+  if (req.method !== "DELETE" && req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  if (!checkGameModeAuth(req)) {
+    res.status(401).json({ error: "Invalid or missing X-MTGAES-Auth header" });
+    return;
+  }
+
+  const env = envFromReq(req);
+  const id = (req.query.id || req.body?.id || "").toString();
+  if (!id) {
+    res.status(400).json({ error: "Missing id" });
+    return;
+  }
+
+  await admin.database().ref(scopePath(env, `gameModes/${id}`)).remove();
+  await admin.database().ref(scopePath(env, `legalityCache/${id}`)).remove();
+  console.log(`[${env}] gameMode ${id} deleted`);
+  res.json({ ok: true });
+});
+
+/**
+ * Regenerates the legality cache for a single mode (or all modes).
+ * Useful after a card DB upload or to sweep for stale data.
+ * Header: X-MTGAES-Auth: <sha256 of password>
+ */
+exports.regenerateLegality = onRequest(
+  { cors: true, memory: "1GiB", timeoutSeconds: 540 },
+  async (req, res) => {
+    if (!checkGameModeAuth(req)) {
+      res.status(401).json({ error: "Invalid or missing X-MTGAES-Auth header" });
+      return;
+    }
+
+    const env = envFromReq(req);
+    const onlyId = (req.query.id || req.body?.id || "").toString();
+    const modesSnap = await admin.database().ref(scopePath(env, "gameModes")).once("value");
+    if (!modesSnap.exists()) {
+      res.json({ ok: true, regenerated: 0 });
+      return;
+    }
+
+    const modes = modesSnap.val();
+    const ids = onlyId ? [onlyId] : Object.keys(modes);
+    const results = [];
+
+    for (const id of ids) {
+      const mode = modes[id];
+      if (!mode) continue;
+      try {
+        const cache = await resolveLegalityCache(mode, env);
+        await admin.database().ref(scopePath(env, `legalityCache/${id}`)).set({
+          legalArenaIds: cache.legalArenaIds,
+          legalNames: cache.legalNames,
+          totalCards: cache.totalCards,
+          syncedAt: Date.now(),
+        });
+        results.push({ id, totalCards: cache.totalCards });
+        console.log(`[${env}] regenerated legality for ${id}: ${cache.totalCards} cards`);
+      } catch (err) {
+        results.push({ id, error: err.message });
+        console.error(`[${env}] regenerate ${id} failed: ${err.message}`);
+      }
+    }
+
+    res.json({ ok: true, regenerated: results.length, results });
+  }
+);
+
+/**
+ * Validates a game mode submission against the expected schema.
+ * Returns { error: "..." } on failure, {} on success.
+ */
+function validateGameModeSchema(body) {
+  if (!body) return { error: "Empty body" };
+  if (!body.id || !/^[a-z0-9_-]+$/.test(body.id)) {
+    return { error: "id must be a non-empty slug (a-z, 0-9, _, -)" };
+  }
+  if (!body.displayName || typeof body.displayName !== "string") {
+    return { error: "displayName is required" };
+  }
+  if (!body.legalitySource) return { error: "legalitySource is required" };
+  const ls = body.legalitySource;
+  if (ls.type === "scryfall") {
+    if (!ls.query) return { error: "legalitySource.query is required for scryfall type" };
+  } else if (ls.type === "sqlite") {
+    if (!Array.isArray(ls.rarities) || ls.rarities.length === 0) {
+      return { error: "legalitySource.rarities must be a non-empty array" };
+    }
+    const validRarities = new Set(["basic", "common", "uncommon", "rare", "mythic"]);
+    for (const r of ls.rarities) {
+      if (!validRarities.has(r)) return { error: `Unknown rarity: ${r}` };
+    }
+  } else {
+    return { error: "legalitySource.type must be 'scryfall' or 'sqlite'" };
+  }
+  return {};
+}
+
+/**
+ * Resolves a legality source to the actual { legalArenaIds, legalNames } caches.
+ * For scryfall: runs the existing Scryfall sync logic.
+ * For sqlite: reads /cardMetadata/cards and filters by rarity/set.
+ */
+async function resolveLegalityCache(mode, env) {
+  const ls = mode.legalitySource;
+  if (ls.type === "scryfall") {
+    const result = await syncFormatFromScryfall(
+      mode.id, ls.query, true, !!ls.filterCommonPrints, env
+    );
+    // syncFormatFromScryfall wrote to /formats/{id} as a side effect — read it back.
+    const [idsSnap, namesSnap] = await Promise.all([
+      admin.database().ref(scopePath(env, `formats/${mode.id}/legalArenaIds`)).once("value"),
+      admin.database().ref(scopePath(env, `formats/${mode.id}/legalNames`)).once("value"),
+    ]);
+    return {
+      legalArenaIds: idsSnap.val() || {},
+      legalNames: namesSnap.val() || {},
+      totalCards: result.totalCards || 0,
+    };
+  }
+
+  if (ls.type === "sqlite") {
+    const cardsSnap = await admin.database().ref(scopePath(env, "cardMetadata/cards")).once("value");
+    if (!cardsSnap.exists()) {
+      throw new Error("cardMetadata/cards is empty — upload the MTGA card DB first");
+    }
+    const cards = cardsSnap.val();
+    const allowedRarities = new Set(ls.rarities);
+    const allowedSets = ls.sets && ls.sets.length > 0 ? new Set(ls.sets) : null;
+    const excludedNames = new Set((ls.excludeNames || []).map(n => n.toLowerCase()));
+
+    const legalArenaIds = {};
+    const legalNames = {};
+    let count = 0;
+
+    for (const [grpId, c] of Object.entries(cards)) {
+      if (!allowedRarities.has(c.rarity)) continue;
+      if (allowedSets && !allowedSets.has(c.set)) continue;
+      const lname = (c.name || "").toLowerCase();
+      if (excludedNames.has(lname)) continue;
+      legalArenaIds[grpId] = true;
+      if (lname) legalNames[encodeFirebaseKey(lname)] = true;
+      count++;
+    }
+
+    return { legalArenaIds, legalNames, totalCards: count };
+  }
+
+  throw new Error(`Unknown legalitySource.type: ${ls.type}`);
+}
 
 // ===========================================================================
 // Card metadata pipeline
