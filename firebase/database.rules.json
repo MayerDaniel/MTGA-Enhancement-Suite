@@ -14,6 +14,10 @@
     "formatList": {
       ".read": "auth != null",
       ".write": false
+    },
+    "discordMessages": {
+      ".read": false,
+      ".write": false
     }
   }
 }

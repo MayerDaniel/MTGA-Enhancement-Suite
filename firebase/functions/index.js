@@ -575,18 +575,41 @@ exports.expireStaleDiscordMessages = onScheduleV2(
     const now = Math.floor(Date.now() / 1000);
     const staleThreshold = now - 120; // 2 minutes — matches in-game browser filter
 
-    const lobbiesSnap = await admin.database().ref("lobbies").once("value");
-    if (!lobbiesSnap.exists()) return;
+    // Iterate the dedicated /discordMessages path so we catch lobbies even if
+    // their /lobbies node was wiped/overwritten (e.g. by re-clicking Make Public).
+    const [lobbiesSnap, msgsSnap] = await Promise.all([
+      admin.database().ref("lobbies").once("value"),
+      admin.database().ref("discordMessages").once("value"),
+    ]);
 
-    const lobbies = lobbiesSnap.val();
+    const lobbies = lobbiesSnap.exists() ? lobbiesSnap.val() : {};
+    const tracked = msgsSnap.exists() ? msgsSnap.val() : {};
+
     const secrets = {
       general: discordWebhookUrl.value(),
       planar: discordPlanarStdWebhookUrl.value(),
       pauper: discordPauperWebhookUrl.value(),
     };
 
-    for (const [id, lobby] of Object.entries(lobbies)) {
-      if (!lobby.discordMessages) continue;
+    // Build a unified set of lobby IDs to consider
+    const allIds = new Set([...Object.keys(lobbies), ...Object.keys(tracked)]);
+
+    for (const id of allIds) {
+      const lobby = lobbies[id];
+      const hasTrackedMessages = !!tracked[id];
+      const hasLegacyMessages = lobby && lobby.discordMessages;
+      if (!hasTrackedMessages && !hasLegacyMessages) continue;
+
+      // If the lobby is gone entirely, expire its messages immediately
+      if (!lobby) {
+        console.log(`Expiring orphaned Discord messages for missing lobby ${id}`);
+        try {
+          await expireDiscordMessages(id, {}, secrets);
+        } catch (err) {
+          console.error(`Failed to expire orphaned messages for ${id}: ${err.message}`);
+        }
+        continue;
+      }
 
       const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
       if (lastHeartbeat >= staleThreshold) continue; // still fresh
@@ -681,24 +704,38 @@ async function editWebhookMessage(webhookUrl, messageId, payload) {
 /**
  * Stores Discord message IDs for a lobby so they can be edited later.
  */
+// Discord message IDs are stored at /discordMessages/{lobbyId}/{channel}/{embed,username}
+// (NOT under /lobbies/{lobbyId}/discordMessages) so they survive PUT overwrites of the
+// lobby node when the host clicks "Make Public" multiple times or re-registers.
 async function storeMessageIds(lobbyId, channel, embedMsgId, usernameMsgId) {
   const updates = {};
-  if (embedMsgId) updates[`lobbies/${lobbyId}/discordMessages/${channel}/embed`] = embedMsgId;
-  if (usernameMsgId) updates[`lobbies/${lobbyId}/discordMessages/${channel}/username`] = usernameMsgId;
+  if (embedMsgId) updates[`discordMessages/${lobbyId}/${channel}/embed`] = embedMsgId;
+  if (usernameMsgId) updates[`discordMessages/${lobbyId}/${channel}/username`] = usernameMsgId;
   if (Object.keys(updates).length > 0) {
     await admin.database().ref().update(updates);
   }
 }
 
+// Read tracked Discord message IDs for a lobby. Checks the new path first,
+// then falls back to the legacy /lobbies/{id}/discordMessages path.
+async function getMessageIds(lobbyId, lobbyData) {
+  // Try new path
+  const snap = await admin.database().ref(`discordMessages/${lobbyId}`).once("value");
+  if (snap.exists()) return snap.val();
+  // Legacy fallback
+  return lobbyData ? lobbyData.discordMessages : null;
+}
+
 /**
  * Edits all tracked Discord messages for a lobby to show "Lobby Closed".
+ * Reads message IDs from /discordMessages/{lobbyId} (with legacy fallback).
  */
 async function expireDiscordMessages(lobbyId, lobby, secrets) {
-  const messages = lobby.discordMessages;
+  const messages = await getMessageIds(lobbyId, lobby);
   if (!messages) return;
 
-  const host = lobby.hostDisplayName || "Unknown";
-  const format = lobby.format || "none";
+  const host = (lobby && lobby.hostDisplayName) || "Unknown";
+  const format = (lobby && lobby.format) || "none";
 
   const webhookMap = {
     general: secrets.general,
@@ -736,17 +773,19 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
     }
   }
 
-  // Clean up discordMessages from Firebase so they don't get re-expired
+  // Clean up tracked message IDs (both new path and legacy)
   try {
-    const ref = admin.database().ref(`lobbies/${lobbyId}/discordMessages`);
-    const snap = await ref.once("value");
-    if (snap.exists()) {
-      await ref.remove();
-      console.log(`Cleaned up discordMessages for lobby ${lobbyId}`);
-    }
+    await admin.database().ref(`discordMessages/${lobbyId}`).remove();
+    console.log(`Cleaned up /discordMessages/${lobbyId}`);
+  } catch (err) {
+    console.log(`Could not clean /discordMessages/${lobbyId}: ${err.message}`);
+  }
+  try {
+    const legacyRef = admin.database().ref(`lobbies/${lobbyId}/discordMessages`);
+    const legacySnap = await legacyRef.once("value");
+    if (legacySnap.exists()) await legacyRef.remove();
   } catch (err) {
     // Lobby may already be deleted, that's fine
-    console.log(`Could not clean discordMessages for ${lobbyId} (may already be deleted): ${err.message}`);
   }
 }
 
@@ -930,26 +969,24 @@ exports.expireDiscordOnLobbyClose = onValueWritten(
   async (event) => {
     const before = event.data.before.val();
     const after = event.data.after.val();
-
-    // Check both before and after for discordMessages (after has them on re-publicize)
-    const lobbyData = before || {};
-    const afterData = after || {};
-
-    // Get discordMessages from whichever has them
-    const discordMessages = lobbyData.discordMessages || afterData.discordMessages;
-    if (!discordMessages) return; // no tracked messages anywhere
+    const lobbyId = event.params.lobbyId;
 
     const lobbyDeleted = !after;
     const lobbyWentPrivate = after && !after.isPublic && (before && before.isPublic);
 
     if (!lobbyDeleted && !lobbyWentPrivate) return;
 
-    const lobbyId = event.params.lobbyId;
-    const messageChannels = Object.keys(discordMessages);
-    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages for channels: ${messageChannels.join(", ")}`);
+    // Check the dedicated /discordMessages/{lobbyId} path (survives PUT overwrites)
+    // and the legacy embedded path for backward compatibility.
+    const lobbyData = before || {};
+    const afterData = after || {};
+    const messages = await getMessageIds(lobbyId, lobbyData) ||
+                     (afterData.discordMessages || null);
+    if (!messages) return; // no tracked messages anywhere
 
-    // Use lobby data from whichever side has it for display info
-    const displayLobby = { ...lobbyData, ...afterData, discordMessages };
+    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages for channels: ${Object.keys(messages).join(", ")}`);
+
+    const displayLobby = { ...lobbyData, ...afterData };
 
     await expireDiscordMessages(lobbyId, displayLobby, {
       general: discordWebhookUrl.value(),
