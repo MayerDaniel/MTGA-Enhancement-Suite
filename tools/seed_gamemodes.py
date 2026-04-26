@@ -16,7 +16,9 @@ Usage:
 import argparse
 import hashlib
 import json
+import socket
 import sys
+import time
 import urllib.request
 import urllib.error
 
@@ -103,15 +105,50 @@ def post_mode(env: str, mode: dict) -> None:
         },
         method="POST",
     )
+    # Cloud Run API gateway forces a 60s response timeout, but the function
+    # itself can run for up to 540s. We fire the request with a short timeout
+    # and treat the timeout as "still running" — we'll verify with a poll
+    # against /listGameModes after all submissions are sent.
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=55) as resp:
             data = json.loads(resp.read())
-            print(f"  ✓ {mode['id']}: {data.get('totalCards', '?')} legal cards")
+            print(f"  OK {mode['id']}: {data.get('totalCards', '?')} legal cards")
+    except (socket.timeout, TimeoutError):
+        print(f"  ... {mode['id']}: request timed out (function still running in background)")
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"  ✗ {mode['id']}: HTTP {e.code} {body}", file=sys.stderr)
+        # 504 Gateway Timeout from Cloud Run — same as a socket timeout
+        if e.code == 504:
+            print(f"  ... {mode['id']}: 504 timeout (function still running in background)")
+        else:
+            body = e.read().decode("utf-8", errors="replace")
+            print(f"  FAIL {mode['id']}: HTTP {e.code} {body}", file=sys.stderr)
     except urllib.error.URLError as e:
-        print(f"  ✗ {mode['id']}: {e.reason}", file=sys.stderr)
+        # urlopen wraps socket timeouts in URLError too
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            print(f"  ... {mode['id']}: read timed out (function still running in background)")
+        else:
+            print(f"  FAIL {mode['id']}: {e.reason}", file=sys.stderr)
+
+
+def verify_seed(env: str, expected_ids: list) -> None:
+    """Polls /listGameModes after submission to confirm modes landed."""
+    url = f"{FUNCTIONS_URL}/listGameModes?env={env}"
+    print(f"\nVerifying seed by polling {url}...")
+    for attempt in range(1, 13):  # up to 6 minutes
+        try:
+            with urllib.request.urlopen(url, timeout=20) as resp:
+                data = json.loads(resp.read())
+                modes = data.get("modes") or {}
+                present = [mid for mid in expected_ids if mid in modes]
+                missing = [mid for mid in expected_ids if mid not in modes]
+                print(f"  attempt {attempt}: present={present}, missing={missing}")
+                if not missing:
+                    print("  All expected modes are present.")
+                    return
+        except Exception as ex:
+            print(f"  attempt {attempt}: poll failed: {ex}")
+        time.sleep(30)
+    print("  Some modes did not land in time. Re-run individual seeds with --only.")
 
 
 def main():
@@ -135,6 +172,11 @@ def main():
     for mode in targets:
         print(f"\nSeeding {mode['id']} ({mode['legalitySource']['type']})...")
         post_mode(args.env, mode)
+
+    # After submitting all modes, poll listGameModes to confirm they landed.
+    # Cloud Functions can keep running for up to 9 minutes after the HTTP
+    # client times out, so we give them time to finish.
+    verify_seed(args.env, [m["id"] for m in targets])
 
     print("\nDone.")
     return 0
