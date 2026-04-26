@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -79,34 +80,61 @@ namespace MTGAEnhancementSuite.Firebase
 
             Plugin.Log.LogInfo($"CardDbUploader: server={Snippet(serverHash) ?? "<none>"} != local={Snippet(hash)}, uploading {Path.GetFileName(dbPath)}");
 
-            byte[] dbBytes;
+            byte[] gzippedBytes;
+            long rawSize;
             try
             {
-                dbBytes = File.ReadAllBytes(dbPath);
+                rawSize = new FileInfo(dbPath).Length;
+                gzippedBytes = GzipFile(dbPath);
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"CardDbUploader: failed to read card DB: {ex.Message}");
+                Plugin.Log.LogWarning($"CardDbUploader: failed to read/gzip card DB: {ex.Message}");
                 yield break;
             }
 
-            yield return UploadCoroutine(dbBytes, hash, Path.GetFileName(dbPath));
+            Plugin.Log.LogInfo($"CardDbUploader: gzipped {rawSize / (1024 * 1024)}MB → {gzippedBytes.Length / (1024 * 1024)}MB");
+
+            yield return UploadCoroutine(gzippedBytes, hash, Path.GetFileName(dbPath));
+        }
+
+        /// <summary>
+        /// Reads the .mtga SQLite file and returns gzip-compressed bytes.
+        /// SQLite content compresses extremely well — typically 5-10x smaller —
+        /// which keeps us under Cloud Run's 32MB request body limit.
+        /// </summary>
+        private static byte[] GzipFile(string path)
+        {
+            using (var input = File.OpenRead(path))
+            using (var output = new MemoryStream())
+            {
+                using (var gz = new GZipStream(output, CompressionMode.Compress, leaveOpen: true))
+                {
+                    var buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                        gz.Write(buffer, 0, read);
+                }
+                return output.ToArray();
+            }
         }
 
         private static IEnumerator UploadCoroutine(byte[] dbBytes, string hash, string fileName)
         {
             var config = FirebaseConfig.Instance;
+            // The function expects .mtga.gz when Content-Encoding indicates gzip.
             var url = config.ScopeFunctionUrl($"{config.FunctionUrl}/uploadCardDb?hash={hash}");
 
             var formParts = new List<IMultipartFormSection>
             {
-                new MultipartFormFileSection("db", dbBytes, fileName, "application/octet-stream"),
+                // Filename suffix .gz is the server's signal to ungzip before parsing.
+                new MultipartFormFileSection("db", dbBytes, fileName + ".gz", "application/gzip"),
                 new MultipartFormDataSection("hash", hash),
             };
 
             using (var request = UnityWebRequest.Post(url, formParts))
             {
-                request.timeout = 300; // 5 minutes
+                request.timeout = 300;
                 var idToken = FirebaseClient.Instance.IdToken;
                 if (!string.IsNullOrEmpty(idToken))
                     request.SetRequestHeader("Authorization", "Bearer " + idToken);

@@ -1633,7 +1633,10 @@ const RARITY_NAMES = { 1: "basic", 2: "common", 3: "uncommon", 4: "rare", 5: "my
  * Query: ?env=staging routes to /staging/cardMetadata.
  */
 exports.uploadCardDb = onRequest(
-  { cors: true, memory: "1GiB", timeoutSeconds: 540 },
+  // Cloud Run defaults to a 32MB body limit. Gzipped MTGA card DBs are
+  // typically 30-50MB, so we lift it explicitly. memory bumped to handle
+  // ~250MB decompressed sqlite + parse.
+  { cors: true, memory: "2GiB", timeoutSeconds: 540, maxInstances: 1 },
   async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method not allowed" });
@@ -1670,35 +1673,66 @@ exports.uploadCardDb = onRequest(
       return;
     }
 
-    // Parse multipart upload to /tmp
-    const tmpFile = await new Promise((resolve, reject) => {
+    // Parse multipart upload to /tmp.
+    // Filenames ending in .gz indicate the body was gzipped client-side
+    // (the SQLite DB is ~250MB raw but ~30-40MB gzipped, fitting in the
+    // 32MB Cloud Run body cap with a tiny buffer).
+    const upload = await new Promise((resolve, reject) => {
       let outPath = null;
+      let isGzipped = false;
+      let originalName = null;
       let bb;
       try {
-        bb = Busboy({ headers: req.headers, limits: { fileSize: 100 * 1024 * 1024 /* 100MB */ } });
+        bb = Busboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024 } });
       } catch (err) {
         reject(err);
         return;
       }
       bb.on("file", (fieldname, file, info) => {
-        outPath = path.join(os.tmpdir(), `card-db-${Date.now()}.mtga`);
+        const fname = (info && info.filename) || "";
+        const mime = (info && info.mimeType) || "";
+        isGzipped = fname.toLowerCase().endsWith(".gz") ||
+                    mime === "application/gzip" ||
+                    mime === "application/x-gzip";
+        originalName = fname.replace(/\.gz$/i, "");
+        outPath = path.join(os.tmpdir(),
+          `card-db-${Date.now()}${isGzipped ? ".gz" : ".mtga"}`);
         const ws = fs.createWriteStream(outPath);
         file.pipe(ws);
         ws.on("close", () => { /* done */ });
       });
       bb.on("error", reject);
-      bb.on("close", () => resolve(outPath));
-      // Cloud Functions deliver the parsed body on req.rawBody; busboy needs the raw stream
-      if (req.rawBody) {
-        bb.end(req.rawBody);
-      } else {
-        req.pipe(bb);
-      }
+      bb.on("close", () => resolve({ outPath, isGzipped, originalName }));
+      if (req.rawBody) bb.end(req.rawBody);
+      else req.pipe(bb);
     });
 
+    let tmpFile = upload.outPath;
     if (!tmpFile || !fs.existsSync(tmpFile)) {
       res.status(400).json({ error: "No file uploaded (expected multipart field 'db')" });
       return;
+    }
+
+    // If gzipped, decompress to a sibling .mtga file and free the .gz.
+    if (upload.isGzipped) {
+      try {
+        const zlib = require("zlib");
+        const decompressed = path.join(os.tmpdir(), `card-db-${Date.now()}.mtga`);
+        await new Promise((resolve, reject) => {
+          const inStream = fs.createReadStream(tmpFile);
+          const outStream = fs.createWriteStream(decompressed);
+          inStream.pipe(zlib.createGunzip()).pipe(outStream)
+            .on("finish", resolve)
+            .on("error", reject);
+        });
+        try { fs.unlinkSync(tmpFile); } catch {}
+        tmpFile = decompressed;
+        console.log(`uploadCardDb: ungzipped ${upload.originalName || "card db"} -> ${tmpFile}`);
+      } catch (err) {
+        try { fs.unlinkSync(tmpFile); } catch {}
+        res.status(400).json({ error: `Failed to decompress gzipped upload: ${err.message}` });
+        return;
+      }
     }
 
     let parsed;
