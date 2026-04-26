@@ -3,14 +3,61 @@ const { onSchedule: onScheduleV2 } = require("firebase-functions/v2/scheduler");
 const { onValueWritten } = require("firebase-functions/v2/database");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const Busboy = require("busboy");
 
 const discordWebhookUrl = defineSecret("DISCORD_WEBHOOK_URL");
 const discordPlanarStdWebhookUrl = defineSecret("DISCORD_WEBHOOK_PLANAR_STD");
 const discordPauperWebhookUrl = defineSecret("DISCORD_WEBHOOK_PAUPER");
 
+// Staging Discord webhooks — separate test channels so staging
+// activity doesn't pollute production Discord notifications.
+const discordWebhookStagingUrl = defineSecret("DISCORD_WEBHOOK_STAGING");
+const discordPlanarStdStagingUrl = defineSecret("DISCORD_WEBHOOK_PLANAR_STD_STAGING");
+const discordPauperStagingUrl = defineSecret("DISCORD_WEBHOOK_PAUPER_STAGING");
+
 admin.initializeApp({
   databaseURL: "https://mtga-enhancement-suite-default-rtdb.firebaseio.com",
 });
+
+/**
+ * Returns a database path scoped by environment.
+ * env="staging" -> "staging/<path>", anything else -> "<path>".
+ * All HTTP endpoints accept ?env=staging in the query string.
+ * All onValueWritten triggers are registered twice (once per env).
+ */
+function scopePath(env, path) {
+  const cleaned = String(path).replace(/^\/+/, "");
+  return env === "staging" ? `staging/${cleaned}` : cleaned;
+}
+
+/**
+ * Reads ?env=staging from a v2 onRequest event.
+ */
+function envFromReq(req) {
+  const e = (req.query && req.query.env) || (req.body && req.body.env);
+  return e === "staging" ? "staging" : "prod";
+}
+
+/**
+ * Returns the right Discord secrets bag for the environment.
+ */
+function discordSecretsFor(env) {
+  if (env === "staging") {
+    return {
+      general: discordWebhookStagingUrl.value() || null,
+      planar:  discordPlanarStdStagingUrl.value() || null,
+      pauper:  discordPauperStagingUrl.value() || null,
+    };
+  }
+  return {
+    general: discordWebhookUrl.value() || null,
+    planar:  discordPlanarStdWebhookUrl.value() || null,
+    pauper:  discordPauperWebhookUrl.value() || null,
+  };
+}
 
 const SCRYFALL_SEARCH_URL = "https://api.scryfall.com/cards/search";
 const SCRYFALL_DELAY_MS = 100; // Scryfall asks for 50-100ms between requests
@@ -60,10 +107,12 @@ exports.syncFormatsHttp = onRequest(
         return;
       }
       const meta = FORMAT_REGISTRY[singleFormat];
-      const result = await syncFormatFromScryfall(singleFormat, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints);
+      const env = envFromReq(req);
+      const result = await syncFormatFromScryfall(singleFormat, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints, env);
       res.json(result);
     } else {
-      const results = await syncAllFormats();
+      const env = envFromReq(req);
+      const results = await syncAllFormats(env);
       res.json(results);
     }
   }
@@ -77,7 +126,7 @@ const EXTERNAL_FORMATS = {
   historicpauper: { displayName: "Historic Pauper" },  // synced via tools/sync_pauper_from_mtga.py
 };
 
-async function syncAllFormats() {
+async function syncAllFormats(env = "prod") {
   // Write the format list (clients read this to populate the spinner)
   const formatList = {};
   for (const [key, meta] of Object.entries(FORMAT_REGISTRY)) {
@@ -86,14 +135,14 @@ async function syncAllFormats() {
   for (const [key, meta] of Object.entries(EXTERNAL_FORMATS)) {
     formatList[key] = { displayName: meta.displayName };
   }
-  await admin.database().ref("formatList").set(formatList);
-  console.log(`Format list written: ${Object.keys(formatList).join(", ")}`);
+  await admin.database().ref(scopePath(env, "formatList")).set(formatList);
+  console.log(`Format list written (env=${env}): ${Object.keys(formatList).join(", ")}`);
 
   // Sync each format's legal cards
   const results = [];
   for (const [key, meta] of Object.entries(FORMAT_REGISTRY)) {
     try {
-      const result = await syncFormatFromScryfall(key, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints);
+      const result = await syncFormatFromScryfall(key, meta.scryfallQuery, meta.rawQuery, meta.filterCommonPrints, env);
       results.push(result);
     } catch (err) {
       console.error(`Failed to sync ${key}: ${err.message}`);
@@ -107,7 +156,7 @@ async function syncAllFormats() {
  * Fetches all cards legal in a format that exist on Arena from Scryfall,
  * then writes the arena_id -> card name mapping to Firebase.
  */
-async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCommonPrints) {
+async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCommonPrints, env = "prod") {
   const query = scryfallQuery || `legal:${format}`;
   // rawQuery means the query already includes game: filter — don't append game:arena
   const fullQuery = rawQuery ? query : `${query} game:arena`;
@@ -244,7 +293,7 @@ async function syncFormatFromScryfall(format, scryfallQuery, rawQuery, filterCom
     totalNames: Object.keys(legalNames).length,
   };
 
-  await admin.database().ref(`formats/${format}`).set(update);
+  await admin.database().ref(scopePath(env, `formats/${format}`)).set(update);
 
   const result = {
     format,
@@ -391,12 +440,14 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
     return;
   }
 
+  const env = envFromReq(req);
+
   // Format can come from the request body directly, or looked up from the lobby
   let format = bodyFormat;
   if (!format && challengeId) {
     const lobbySnap = await admin
       .database()
-      .ref(`lobbies/${challengeId}`)
+      .ref(scopePath(env, `lobbies/${challengeId}`))
       .once("value");
 
     if (lobbySnap.exists()) {
@@ -416,8 +467,8 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
 
   // Get the legal arena IDs and name fallbacks for this format
   const [idsSnap, namesSnap] = await Promise.all([
-    admin.database().ref(`formats/${format}/legalArenaIds`).once("value"),
-    admin.database().ref(`formats/${format}/legalNames`).once("value"),
+    admin.database().ref(scopePath(env, `formats/${format}/legalArenaIds`)).once("value"),
+    admin.database().ref(scopePath(env, `formats/${format}/legalNames`)).once("value"),
   ]);
 
   if (!idsSnap.exists() && !namesSnap.exists()) {
@@ -471,10 +522,11 @@ exports.validateDeck = onRequest({ cors: true }, async (req, res) => {
  * Returns only active, public lobbies with fresh heartbeats.
  */
 exports.listPublicLobbies = onRequest({ cors: true }, async (req, res) => {
+  const env = envFromReq(req);
   const now = Math.floor(Date.now() / 1000);
   const staleThreshold = now - 120; // 2 minutes
 
-  const lobbiesSnap = await admin.database().ref("lobbies").once("value");
+  const lobbiesSnap = await admin.database().ref(scopePath(env, "lobbies")).once("value");
   if (!lobbiesSnap.exists()) {
     res.json({ lobbies: [] });
     return;
@@ -524,8 +576,10 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
     return;
   }
 
+  const env = envFromReq(req);
+
   // Check lobby exists and is open
-  const lobbySnap = await admin.database().ref(`lobbies/${challengeId}`).once("value");
+  const lobbySnap = await admin.database().ref(scopePath(env, `lobbies/${challengeId}`)).once("value");
   if (!lobbySnap.exists()) {
     res.status(404).json({ error: "Lobby not found or no longer available" });
     return;
@@ -538,13 +592,13 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
   }
 
   // Check for duplicate pending request from same username
-  const existingSnap = await admin.database().ref(`lobbies/${challengeId}/joinRequests`)
+  const existingSnap = await admin.database().ref(scopePath(env, `lobbies/${challengeId}/joinRequests`))
     .orderByChild("username").equalTo(username).once("value");
 
   if (existingSnap.exists()) {
     const existing = existingSnap.val();
-    for (const [key, req] of Object.entries(existing)) {
-      if (req.status === "pending") {
+    for (const [key, jr] of Object.entries(existing)) {
+      if (jr.status === "pending") {
         res.json({ success: true, requestId: key, message: "Request already pending" });
         return;
       }
@@ -552,14 +606,14 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
   }
 
   // Write join request
-  const ref = admin.database().ref(`lobbies/${challengeId}/joinRequests`).push();
+  const ref = admin.database().ref(scopePath(env, `lobbies/${challengeId}/joinRequests`)).push();
   await ref.set({
     username: username,
     timestamp: admin.database.ServerValue.TIMESTAMP,
     status: "pending",
   });
 
-  console.log(`Join request: ${username} → lobby ${challengeId} (${ref.key})`);
+  console.log(`Join request (env=${env}): ${username} → lobby ${challengeId} (${ref.key})`);
   res.json({ success: true, requestId: ref.key });
 });
 
@@ -570,59 +624,67 @@ exports.submitJoinRequest = onRequest({ cors: true }, async (req, res) => {
  * browser's 2-minute staleness filter.
  */
 exports.expireStaleDiscordMessages = onScheduleV2(
-  { schedule: "*/2 * * * *", timeZone: "UTC", secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl] },
+  {
+    schedule: "*/2 * * * *",
+    timeZone: "UTC",
+    secrets: [
+      discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl,
+      discordWebhookStagingUrl, discordPlanarStdStagingUrl, discordPauperStagingUrl,
+    ],
+  },
   async (event) => {
-    const now = Math.floor(Date.now() / 1000);
-    const staleThreshold = now - 120; // 2 minutes — matches in-game browser filter
-
-    // Iterate the dedicated /discordMessages path so we catch lobbies even if
-    // their /lobbies node was wiped/overwritten (e.g. by re-clicking Make Public).
-    const [lobbiesSnap, msgsSnap] = await Promise.all([
-      admin.database().ref("lobbies").once("value"),
-      admin.database().ref("discordMessages").once("value"),
-    ]);
-
-    const lobbies = lobbiesSnap.exists() ? lobbiesSnap.val() : {};
-    const tracked = msgsSnap.exists() ? msgsSnap.val() : {};
-
-    const secrets = {
-      general: discordWebhookUrl.value(),
-      planar: discordPlanarStdWebhookUrl.value(),
-      pauper: discordPauperWebhookUrl.value(),
-    };
-
-    // Build a unified set of lobby IDs to consider
-    const allIds = new Set([...Object.keys(lobbies), ...Object.keys(tracked)]);
-
-    for (const id of allIds) {
-      const lobby = lobbies[id];
-      const hasTrackedMessages = !!tracked[id];
-      const hasLegacyMessages = lobby && lobby.discordMessages;
-      if (!hasTrackedMessages && !hasLegacyMessages) continue;
-
-      // If the lobby is gone entirely, expire its messages immediately
-      if (!lobby) {
-        console.log(`Expiring orphaned Discord messages for missing lobby ${id}`);
-        try {
-          await expireDiscordMessages(id, {}, secrets);
-        } catch (err) {
-          console.error(`Failed to expire orphaned messages for ${id}: ${err.message}`);
-        }
-        continue;
-      }
-
-      const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
-      if (lastHeartbeat >= staleThreshold) continue; // still fresh
-
-      console.log(`Expiring Discord messages for stale lobby ${id} (heartbeat ${now - lastHeartbeat}s ago)`);
+    for (const env of ["prod", "staging"]) {
       try {
-        await expireDiscordMessages(id, lobby, secrets);
+        await expireStaleForEnv(env);
       } catch (err) {
-        console.error(`Failed to expire messages for ${id}: ${err.message}`);
+        console.error(`expireStaleDiscordMessages failed for ${env}: ${err.message}`);
       }
     }
   }
 );
+
+async function expireStaleForEnv(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const staleThreshold = now - 120; // 2 minutes — matches in-game browser filter
+
+  const [lobbiesSnap, msgsSnap] = await Promise.all([
+    admin.database().ref(scopePath(env, "lobbies")).once("value"),
+    admin.database().ref(scopePath(env, "discordMessages")).once("value"),
+  ]);
+
+  const lobbies = lobbiesSnap.exists() ? lobbiesSnap.val() : {};
+  const tracked = msgsSnap.exists() ? msgsSnap.val() : {};
+  const secrets = discordSecretsFor(env);
+
+  const allIds = new Set([...Object.keys(lobbies), ...Object.keys(tracked)]);
+
+  for (const id of allIds) {
+    const lobby = lobbies[id];
+    const hasTrackedMessages = !!tracked[id];
+    const hasLegacyMessages = lobby && lobby.discordMessages;
+    if (!hasTrackedMessages && !hasLegacyMessages) continue;
+
+    if (!lobby) {
+      console.log(`[${env}] Expiring orphaned Discord messages for missing lobby ${id}`);
+      try {
+        await expireDiscordMessages(id, {}, secrets, env);
+      } catch (err) {
+        console.error(`[${env}] Failed to expire orphaned messages for ${id}: ${err.message}`);
+      }
+      continue;
+    }
+
+    const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
+    if (lastHeartbeat >= staleThreshold) continue;
+
+    console.log(`[${env}] Expiring Discord messages for stale lobby ${id} (heartbeat ${now - lastHeartbeat}s ago)`);
+    try {
+      await expireDiscordMessages(id, lobby, secrets, env);
+    } catch (err) {
+      console.error(`[${env}] Failed to expire messages for ${id}: ${err.message}`);
+    }
+  }
+}
 
 /**
  * Cleans up stale lobbies every 30 minutes.
@@ -632,29 +694,39 @@ exports.expireStaleDiscordMessages = onScheduleV2(
 exports.cleanStaleLobbies = onScheduleV2(
   { schedule: "*/30 * * * *", timeZone: "UTC" },
   async (event) => {
-    const now = Math.floor(Date.now() / 1000);
-    const staleThreshold = now - 300; // 5 minutes
-
-    const lobbiesSnap = await admin.database().ref("lobbies").once("value");
-    if (!lobbiesSnap.exists()) return;
-
-    const lobbies = lobbiesSnap.val();
-    const deletions = [];
-
-    for (const [id, lobby] of Object.entries(lobbies)) {
-      const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
-      if (lastHeartbeat < staleThreshold) {
-        deletions.push(admin.database().ref(`lobbies/${id}`).remove());
-        console.log(`Deleting stale lobby ${id} (last heartbeat: ${lastHeartbeat})`);
+    for (const env of ["prod", "staging"]) {
+      try {
+        await cleanStaleForEnv(env);
+      } catch (err) {
+        console.error(`cleanStaleLobbies failed for ${env}: ${err.message}`);
       }
-    }
-
-    if (deletions.length > 0) {
-      await Promise.all(deletions);
-      console.log(`Cleaned up ${deletions.length} stale lobbies`);
     }
   }
 );
+
+async function cleanStaleForEnv(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const staleThreshold = now - 300; // 5 minutes
+
+  const lobbiesSnap = await admin.database().ref(scopePath(env, "lobbies")).once("value");
+  if (!lobbiesSnap.exists()) return;
+
+  const lobbies = lobbiesSnap.val();
+  const deletions = [];
+
+  for (const [id, lobby] of Object.entries(lobbies)) {
+    const lastHeartbeat = lobby.lastHeartbeat || lobby.createdAt || 0;
+    if (lastHeartbeat < staleThreshold) {
+      deletions.push(admin.database().ref(scopePath(env, `lobbies/${id}`)).remove());
+      console.log(`[${env}] Deleting stale lobby ${id} (last heartbeat: ${lastHeartbeat})`);
+    }
+  }
+
+  if (deletions.length > 0) {
+    await Promise.all(deletions);
+    console.log(`[${env}] Cleaned up ${deletions.length} stale lobbies`);
+  }
+}
 
 // --- Discord Webhook Helpers ---
 
@@ -707,10 +779,11 @@ async function editWebhookMessage(webhookUrl, messageId, payload) {
 // Discord message IDs are stored at /discordMessages/{lobbyId}/{channel}/{embed,username}
 // (NOT under /lobbies/{lobbyId}/discordMessages) so they survive PUT overwrites of the
 // lobby node when the host clicks "Make Public" multiple times or re-registers.
-async function storeMessageIds(lobbyId, channel, embedMsgId, usernameMsgId) {
+async function storeMessageIds(lobbyId, channel, embedMsgId, usernameMsgId, env = "prod") {
   const updates = {};
-  if (embedMsgId) updates[`discordMessages/${lobbyId}/${channel}/embed`] = embedMsgId;
-  if (usernameMsgId) updates[`discordMessages/${lobbyId}/${channel}/username`] = usernameMsgId;
+  const base = scopePath(env, `discordMessages/${lobbyId}/${channel}`);
+  if (embedMsgId) updates[`${base}/embed`] = embedMsgId;
+  if (usernameMsgId) updates[`${base}/username`] = usernameMsgId;
   if (Object.keys(updates).length > 0) {
     await admin.database().ref().update(updates);
   }
@@ -718,9 +791,9 @@ async function storeMessageIds(lobbyId, channel, embedMsgId, usernameMsgId) {
 
 // Read tracked Discord message IDs for a lobby. Checks the new path first,
 // then falls back to the legacy /lobbies/{id}/discordMessages path.
-async function getMessageIds(lobbyId, lobbyData) {
+async function getMessageIds(lobbyId, lobbyData, env = "prod") {
   // Try new path
-  const snap = await admin.database().ref(`discordMessages/${lobbyId}`).once("value");
+  const snap = await admin.database().ref(scopePath(env, `discordMessages/${lobbyId}`)).once("value");
   if (snap.exists()) return snap.val();
   // Legacy fallback
   return lobbyData ? lobbyData.discordMessages : null;
@@ -730,8 +803,8 @@ async function getMessageIds(lobbyId, lobbyData) {
  * Edits all tracked Discord messages for a lobby to show "Lobby Closed".
  * Reads message IDs from /discordMessages/{lobbyId} (with legacy fallback).
  */
-async function expireDiscordMessages(lobbyId, lobby, secrets) {
-  const messages = await getMessageIds(lobbyId, lobby);
+async function expireDiscordMessages(lobbyId, lobby, secrets, env = "prod") {
+  const messages = await getMessageIds(lobbyId, lobby, env);
   if (!messages) return;
 
   const host = (lobby && lobby.hostDisplayName) || "Unknown";
@@ -791,13 +864,13 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
 
   // Clean up tracked message IDs (both new path and legacy)
   try {
-    await admin.database().ref(`discordMessages/${lobbyId}`).remove();
-    console.log(`Cleaned up /discordMessages/${lobbyId}`);
+    await admin.database().ref(scopePath(env, `discordMessages/${lobbyId}`)).remove();
+    console.log(`Cleaned up /${scopePath(env, `discordMessages/${lobbyId}`)}`);
   } catch (err) {
-    console.log(`Could not clean /discordMessages/${lobbyId}: ${err.message}`);
+    console.log(`Could not clean /${scopePath(env, `discordMessages/${lobbyId}`)}: ${err.message}`);
   }
   try {
-    const legacyRef = admin.database().ref(`lobbies/${lobbyId}/discordMessages`);
+    const legacyRef = admin.database().ref(scopePath(env, `lobbies/${lobbyId}/discordMessages`));
     const legacySnap = await legacyRef.once("value");
     if (legacySnap.exists()) await legacyRef.remove();
   } catch (err) {
@@ -808,206 +881,438 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
 /**
  * Sends a Discord notification when a lobby becomes public.
  * Tracks message IDs for later editing when the lobby closes.
+ * Registered twice — once for /lobbies/{id} (prod) and once for /staging/lobbies/{id}.
  */
+async function handleNotifyGeneral(event, env) {
+  const before = event.data.before.val();
+  const after = event.data.after.val();
+
+  if (!after || !after.isPublic) return;
+  if (before && before.isPublic) return;
+
+  const lobby = after;
+  const lobbyId = event.params.lobbyId;
+  const host = lobby.hostDisplayName || "Unknown";
+  const hostFull = lobby.hostFullName || host;
+  const format = lobby.format || "none";
+  const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
+  const bestOf = lobby.isBestOf3 ? "Bo3" : "Bo1";
+  const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
+
+  const webhookUrl = discordSecretsFor(env).general;
+  if (!webhookUrl) {
+    console.log(`[${env}] notifyDiscordOnPublicLobby: no webhook configured, skipping`);
+    return;
+  }
+
+  try {
+    const embedMsgId = await sendWebhookMessage(webhookUrl, {
+      embeds: [{
+        title: env === "staging" ? "🧪 [STAGING] New Public Lobby" : "🎮 New Public Lobby",
+        color: 0x00ff88,
+        fields: [
+          { name: "Host", value: host, inline: true },
+          { name: "Format", value: formatDisplay, inline: true },
+          { name: "Best Of", value: bestOf, inline: true },
+        ],
+        url: joinUrl,
+        description: `**[Click to join](${joinUrl})**`,
+        timestamp: new Date().toISOString(),
+      }],
+    });
+
+    const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+      content: `${hostFull}`,
+    });
+
+    await storeMessageIds(lobbyId, "general", embedMsgId, usernameMsgId, env);
+    console.log(`[${env}] Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
+  } catch (err) {
+    console.error(`[${env}] Discord webhook error: ${err.message}`);
+  }
+}
+
 exports.notifyDiscordOnPublicLobby = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
     instance: "mtga-enhancement-suite-default-rtdb",
     secrets: [discordWebhookUrl],
   },
-  async (event) => {
-    const before = event.data.before.val();
-    const after = event.data.after.val();
+  (event) => handleNotifyGeneral(event, "prod")
+);
 
-    if (!after || !after.isPublic) return;
-    if (before && before.isPublic) return;
-
-    const lobby = after;
-    const lobbyId = event.params.lobbyId;
-    const host = lobby.hostDisplayName || "Unknown";
-    const hostFull = lobby.hostFullName || host;
-    const format = lobby.format || "none";
-    const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
-    const bestOf = lobby.isBestOf3 ? "Bo3" : "Bo1";
-    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
-
-    const webhookUrl = discordWebhookUrl.value();
-    if (!webhookUrl) return;
-
-    try {
-      const embedMsgId = await sendWebhookMessage(webhookUrl, {
-        embeds: [{
-          title: "🎮 New Public Lobby",
-          color: 0x00ff88,
-          fields: [
-            { name: "Host", value: host, inline: true },
-            { name: "Format", value: formatDisplay, inline: true },
-            { name: "Best Of", value: bestOf, inline: true },
-          ],
-          url: joinUrl,
-          description: `**[Click to join](${joinUrl})**`,
-          timestamp: new Date().toISOString(),
-        }],
-      });
-
-      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
-        content: `${hostFull}`,
-      });
-
-      await storeMessageIds(lobbyId, "general", embedMsgId, usernameMsgId);
-      console.log(`Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
-    } catch (err) {
-      console.error(`Discord webhook error: ${err.message}`);
-    }
-  }
+exports.notifyDiscordOnPublicLobbyStaging = onValueWritten(
+  {
+    ref: "/staging/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordWebhookStagingUrl],
+  },
+  (event) => handleNotifyGeneral(event, "staging")
 );
 
 /**
  * Sends a Discord notification to the Planar Standard channel.
+ * Registered twice — once per env.
  */
+async function handleNotifyPlanarStd(event, env) {
+  const before = event.data.before.val();
+  const after = event.data.after.val();
+
+  if (!after || !after.isPublic) return;
+  if (before && before.isPublic) return;
+  if (after.format !== "planarstandard") return;
+
+  const lobbyId = event.params.lobbyId;
+  const host = after.hostDisplayName || "Unknown";
+  const hostFull = after.hostFullName || host;
+  const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
+  const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
+
+  const webhookUrl = discordSecretsFor(env).planar;
+  if (!webhookUrl) {
+    console.log(`[${env}] notifyDiscordPlanarStandard: no webhook configured, skipping`);
+    return;
+  }
+
+  try {
+    const embedMsgId = await sendWebhookMessage(webhookUrl, {
+      embeds: [{
+        title: env === "staging" ? "🧪 [STAGING] Planar Standard Lobby Open" : "⚔️ Planar Standard Lobby Open",
+        color: 0xf5a623,
+        fields: [
+          { name: "Host", value: host, inline: true },
+          { name: "Format", value: "Planar Standard", inline: true },
+          { name: "Best Of", value: bestOf, inline: true },
+        ],
+        url: joinUrl,
+        description: `**[Click to join](${joinUrl})**`,
+        timestamp: new Date().toISOString(),
+      }],
+    });
+
+    // Skip the @LFG-Arena role ping in staging
+    const tagPrefix = env === "staging" ? "" : "<@&1429556399473557755> ";
+    const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+      content: `${tagPrefix}${hostFull}`,
+    });
+
+    await storeMessageIds(lobbyId, "planar", embedMsgId, usernameMsgId, env);
+    console.log(`[${env}] Planar Std Discord notified: ${host} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
+  } catch (err) {
+    console.error(`[${env}] Planar Std Discord webhook error: ${err.message}`);
+  }
+}
+
 exports.notifyDiscordPlanarStandard = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
     instance: "mtga-enhancement-suite-default-rtdb",
     secrets: [discordPlanarStdWebhookUrl],
   },
-  async (event) => {
-    const before = event.data.before.val();
-    const after = event.data.after.val();
+  (event) => handleNotifyPlanarStd(event, "prod")
+);
 
-    if (!after || !after.isPublic) return;
-    if (before && before.isPublic) return;
-    if (after.format !== "planarstandard") return;
-
-    const lobbyId = event.params.lobbyId;
-    const host = after.hostDisplayName || "Unknown";
-    const hostFull = after.hostFullName || host;
-    const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
-    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=planarstandard`;
-
-    const webhookUrl = discordPlanarStdWebhookUrl.value();
-    if (!webhookUrl) return;
-
-    try {
-      const embedMsgId = await sendWebhookMessage(webhookUrl, {
-        embeds: [{
-          title: "⚔️ Planar Standard Lobby Open",
-          color: 0xf5a623,
-          fields: [
-            { name: "Host", value: host, inline: true },
-            { name: "Format", value: "Planar Standard", inline: true },
-            { name: "Best Of", value: bestOf, inline: true },
-          ],
-          url: joinUrl,
-          description: `**[Click to join](${joinUrl})**`,
-          timestamp: new Date().toISOString(),
-        }],
-      });
-
-      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
-        content: `<@&1429556399473557755> ${hostFull}`,
-      });
-
-      await storeMessageIds(lobbyId, "planar", embedMsgId, usernameMsgId);
-      console.log(`Planar Std Discord notified: ${host} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
-    } catch (err) {
-      console.error(`Planar Std Discord webhook error: ${err.message}`);
-    }
-  }
+exports.notifyDiscordPlanarStandardStaging = onValueWritten(
+  {
+    ref: "/staging/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordPlanarStdStagingUrl],
+  },
+  (event) => handleNotifyPlanarStd(event, "staging")
 );
 
 /**
  * Sends a Discord notification to the Pauper channel.
+ * Registered twice — once per env.
  */
+async function handleNotifyPauper(event, env) {
+  const before = event.data.before.val();
+  const after = event.data.after.val();
+
+  if (!after || !after.isPublic) return;
+  if (before && before.isPublic) return;
+  if (!PAUPER_FORMATS.includes(after.format)) return;
+
+  const lobbyId = event.params.lobbyId;
+  const host = after.hostDisplayName || "Unknown";
+  const hostFull = after.hostFullName || host;
+  const format = after.format || "pauper";
+  const formatDisplay = PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
+  const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
+  const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
+
+  const webhookUrl = discordSecretsFor(env).pauper;
+  if (!webhookUrl) {
+    console.log(`[${env}] notifyDiscordPauper: no webhook configured, skipping`);
+    return;
+  }
+
+  try {
+    const embedMsgId = await sendWebhookMessage(webhookUrl, {
+      embeds: [{
+        title: env === "staging" ? "🧪 [STAGING] Pauper Lobby Open" : "🃏 Pauper Lobby Open",
+        color: 0x8b6914,
+        fields: [
+          { name: "Host", value: host, inline: true },
+          { name: "Format", value: formatDisplay, inline: true },
+          { name: "Best Of", value: bestOf, inline: true },
+        ],
+        url: joinUrl,
+        description: `**[Click to join](${joinUrl})**`,
+        timestamp: new Date().toISOString(),
+      }],
+    });
+
+    const usernameMsgId = await sendWebhookMessage(webhookUrl, {
+      content: `${hostFull}`,
+    });
+
+    await storeMessageIds(lobbyId, "pauper", embedMsgId, usernameMsgId, env);
+    console.log(`[${env}] Pauper Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
+  } catch (err) {
+    console.error(`[${env}] Pauper Discord webhook error: ${err.message}`);
+  }
+}
+
 exports.notifyDiscordPauper = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
     instance: "mtga-enhancement-suite-default-rtdb",
     secrets: [discordPauperWebhookUrl],
   },
-  async (event) => {
-    const before = event.data.before.val();
-    const after = event.data.after.val();
+  (event) => handleNotifyPauper(event, "prod")
+);
 
-    if (!after || !after.isPublic) return;
-    if (before && before.isPublic) return;
-    if (!PAUPER_FORMATS.includes(after.format)) return;
-
-    const lobbyId = event.params.lobbyId;
-    const host = after.hostDisplayName || "Unknown";
-    const hostFull = after.hostFullName || host;
-    const format = after.format || "pauper";
-    const formatDisplay = PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
-    const bestOf = after.isBestOf3 ? "Bo3" : "Bo1";
-    const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
-
-    const webhookUrl = discordPauperWebhookUrl.value();
-    if (!webhookUrl) return;
-
-    try {
-      const embedMsgId = await sendWebhookMessage(webhookUrl, {
-        embeds: [{
-          title: "🃏 Pauper Lobby Open",
-          color: 0x8b6914,
-          fields: [
-            { name: "Host", value: host, inline: true },
-            { name: "Format", value: formatDisplay, inline: true },
-            { name: "Best Of", value: bestOf, inline: true },
-          ],
-          url: joinUrl,
-          description: `**[Click to join](${joinUrl})**`,
-          timestamp: new Date().toISOString(),
-        }],
-      });
-
-      const usernameMsgId = await sendWebhookMessage(webhookUrl, {
-        content: `${hostFull}`,
-      });
-
-      await storeMessageIds(lobbyId, "pauper", embedMsgId, usernameMsgId);
-      console.log(`Pauper Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
-    } catch (err) {
-      console.error(`Pauper Discord webhook error: ${err.message}`);
-    }
-  }
+exports.notifyDiscordPauperStaging = onValueWritten(
+  {
+    ref: "/staging/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordPauperStagingUrl],
+  },
+  (event) => handleNotifyPauper(event, "staging")
 );
 
 /**
  * Expires Discord messages when a lobby is deleted or set to private.
- * Fires on any write to /lobbies/{lobbyId}.
+ * Registered for both prod and staging lobby paths.
  */
+async function handleExpireOnClose(event, env) {
+  const before = event.data.before.val();
+  const after = event.data.after.val();
+  const lobbyId = event.params.lobbyId;
+
+  const lobbyDeleted = !after;
+  const lobbyWentPrivate = after && !after.isPublic && (before && before.isPublic);
+
+  if (!lobbyDeleted && !lobbyWentPrivate) return;
+
+  const lobbyData = before || {};
+  const afterData = after || {};
+  const messages = await getMessageIds(lobbyId, lobbyData, env) ||
+                   (afterData.discordMessages || null);
+  if (!messages) return;
+
+  console.log(`[${env}] Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages for channels: ${Object.keys(messages).join(", ")}`);
+
+  const displayLobby = { ...lobbyData, ...afterData };
+  await expireDiscordMessages(lobbyId, displayLobby, discordSecretsFor(env), env);
+}
+
 exports.expireDiscordOnLobbyClose = onValueWritten(
   {
     ref: "/lobbies/{lobbyId}",
     instance: "mtga-enhancement-suite-default-rtdb",
     secrets: [discordWebhookUrl, discordPlanarStdWebhookUrl, discordPauperWebhookUrl],
   },
-  async (event) => {
-    const before = event.data.before.val();
-    const after = event.data.after.val();
-    const lobbyId = event.params.lobbyId;
+  (event) => handleExpireOnClose(event, "prod")
+);
 
-    const lobbyDeleted = !after;
-    const lobbyWentPrivate = after && !after.isPublic && (before && before.isPublic);
+exports.expireDiscordOnLobbyCloseStaging = onValueWritten(
+  {
+    ref: "/staging/lobbies/{lobbyId}",
+    instance: "mtga-enhancement-suite-default-rtdb",
+    secrets: [discordWebhookStagingUrl, discordPlanarStdStagingUrl, discordPauperStagingUrl],
+  },
+  (event) => handleExpireOnClose(event, "staging")
+);
 
-    if (!lobbyDeleted && !lobbyWentPrivate) return;
+// ===========================================================================
+// Card metadata pipeline
+// The plugin uploads the MTGA SQLite card DB whenever the local hash differs
+// from /cardMetadataVersion. We parse it here and write a normalized index
+// that the website /gamemodes editor uses for the SQLite-style rarity/set
+// selector. We don't store the .mtga file long-term — we just parse it
+// in /tmp and discard.
+// ===========================================================================
 
-    // Check the dedicated /discordMessages/{lobbyId} path (survives PUT overwrites)
-    // and the legacy embedded path for backward compatibility.
-    const lobbyData = before || {};
-    const afterData = after || {};
-    const messages = await getMessageIds(lobbyId, lobbyData) ||
-                     (afterData.discordMessages || null);
-    if (!messages) return; // no tracked messages anywhere
+// Maps MTGA Rarity int -> human key used in game mode rules.
+// 1=Basic Land, 2=Common, 3=Uncommon, 4=Rare, 5=Mythic.
+const RARITY_NAMES = { 1: "basic", 2: "common", 3: "uncommon", 4: "rare", 5: "mythic" };
 
-    console.log(`Lobby ${lobbyId} closed (deleted=${lobbyDeleted}, wentPrivate=${lobbyWentPrivate}), expiring Discord messages for channels: ${Object.keys(messages).join(", ")}`);
+/**
+ * Receives a multipart upload of the MTGA SQLite DB and writes a parsed
+ * card-metadata index to Firebase. The plugin gates the call on a hash
+ * comparison against /cardMetadataVersion to avoid redundant uploads.
+ *
+ * Multipart fields:
+ *   hash   (text)   - 32-char hex hash from the MTGA filename
+ *   db     (file)   - the .mtga SQLite file
+ *
+ * Query: ?env=staging routes to /staging/cardMetadata.
+ */
+exports.uploadCardDb = onRequest(
+  { cors: true, memory: "1GiB", timeoutSeconds: 540 },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
 
-    const displayLobby = { ...lobbyData, ...afterData };
+    const env = envFromReq(req);
 
-    await expireDiscordMessages(lobbyId, displayLobby, {
-      general: discordWebhookUrl.value(),
-      planar: discordPlanarStdWebhookUrl.value(),
-      pauper: discordPauperWebhookUrl.value(),
+    // Optional auth: accept a Firebase ID token to identify the uploader.
+    // Even unauth uploads are OK for now since the data is identical for everyone.
+    let uploaderUid = null;
+    const authHeader = req.headers.authorization || "";
+    if (authHeader.startsWith("Bearer ")) {
+      try {
+        const decoded = await admin.auth().verifyIdToken(authHeader.substring(7));
+        uploaderUid = decoded.uid;
+      } catch (err) {
+        // Ignore auth failure — proceed unauthenticated
+      }
+    }
+
+    // Compare hash query param against current server hash before we even
+    // accept the upload, so callers don't waste bandwidth.
+    const incomingHash = (req.query.hash || req.body?.hash || "").toString().trim();
+    if (!incomingHash || !/^[0-9a-fA-F]{8,64}$/.test(incomingHash)) {
+      res.status(400).json({ error: "Missing or invalid hash query param" });
+      return;
+    }
+    const versionRef = admin.database().ref(scopePath(env, "cardMetadataVersion"));
+    const versionSnap = await versionRef.once("value");
+    const currentVersion = versionSnap.exists() ? versionSnap.val() : null;
+    if (currentVersion && currentVersion.hash === incomingHash) {
+      res.json({ skipped: true, reason: "hash matches current version", currentVersion });
+      return;
+    }
+
+    // Parse multipart upload to /tmp
+    const tmpFile = await new Promise((resolve, reject) => {
+      let outPath = null;
+      let bb;
+      try {
+        bb = Busboy({ headers: req.headers, limits: { fileSize: 100 * 1024 * 1024 /* 100MB */ } });
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      bb.on("file", (fieldname, file, info) => {
+        outPath = path.join(os.tmpdir(), `card-db-${Date.now()}.mtga`);
+        const ws = fs.createWriteStream(outPath);
+        file.pipe(ws);
+        ws.on("close", () => { /* done */ });
+      });
+      bb.on("error", reject);
+      bb.on("close", () => resolve(outPath));
+      // Cloud Functions deliver the parsed body on req.rawBody; busboy needs the raw stream
+      if (req.rawBody) {
+        bb.end(req.rawBody);
+      } else {
+        req.pipe(bb);
+      }
     });
+
+    if (!tmpFile || !fs.existsSync(tmpFile)) {
+      res.status(400).json({ error: "No file uploaded (expected multipart field 'db')" });
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = parseCardDb(tmpFile);
+    } catch (err) {
+      console.error(`Failed to parse card DB: ${err.message}`);
+      try { fs.unlinkSync(tmpFile); } catch {}
+      res.status(400).json({ error: `Failed to parse SQLite file: ${err.message}` });
+      return;
+    }
+
+    try {
+      await admin.database().ref(scopePath(env, "cardMetadata")).set({
+        sets: parsed.sets,
+        rarities: ["basic", "common", "uncommon", "rare", "mythic"],
+        cards: parsed.cards,
+        totalCards: Object.keys(parsed.cards).length,
+        totalSets: parsed.sets.length,
+      });
+      await versionRef.set({
+        hash: incomingHash,
+        uploadedBy: uploaderUid,
+        uploadedAt: admin.database.ServerValue.TIMESTAMP,
+        totalCards: Object.keys(parsed.cards).length,
+      });
+      console.log(`[${env}] uploadCardDb: parsed ${Object.keys(parsed.cards).length} cards across ${parsed.sets.length} sets, hash=${incomingHash}`);
+      res.json({
+        ok: true,
+        env,
+        totalCards: Object.keys(parsed.cards).length,
+        totalSets: parsed.sets.length,
+        hash: incomingHash,
+      });
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
   }
 );
+
+/**
+ * Opens the MTGA SQLite card DB and produces:
+ *   - cards:  { grpId: { name, rarity, set, digitalSet, isToken, isPrimary, isRebalanced } }
+ *   - sets:   [ { code, count } ] sorted by code
+ * Skips tokens and basic lands' duplicate art entries — keeps primary cards.
+ */
+function parseCardDb(filePath) {
+  const sqlite = require("better-sqlite3");
+  const db = sqlite(filePath, { readonly: true, fileMustExist: true });
+  try {
+    // Build localized name lookup
+    const enRows = db.prepare("SELECT LocId, Loc FROM Localizations_enUS").all();
+    const enNames = {};
+    for (const row of enRows) enNames[row.LocId] = row.Loc;
+
+    const cardRows = db.prepare(`
+      SELECT GrpId, TitleId, Rarity, ExpansionCode, DigitalReleaseSet,
+             IsToken, IsPrimaryCard, IsRebalanced, Order_Title
+      FROM Cards
+    `).all();
+
+    const cards = {};
+    const setCounts = {};
+    for (const row of cardRows) {
+      if (row.IsToken) continue; // skip tokens
+      const name = enNames[row.TitleId] || row.Order_Title || `Card_${row.GrpId}`;
+      const rarity = RARITY_NAMES[row.Rarity] || "unknown";
+      cards[String(row.GrpId)] = {
+        name,
+        rarity,
+        set: row.ExpansionCode || "",
+        digitalSet: row.DigitalReleaseSet || "",
+        isPrimary: !!row.IsPrimaryCard,
+        isRebalanced: !!row.IsRebalanced,
+      };
+      const setKey = row.ExpansionCode || "";
+      if (setKey) setCounts[setKey] = (setCounts[setKey] || 0) + 1;
+    }
+
+    const sets = Object.entries(setCounts)
+      .map(([code, count]) => ({ code, count }))
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    return { cards, sets };
+  } finally {
+    db.close();
+  }
+}
+

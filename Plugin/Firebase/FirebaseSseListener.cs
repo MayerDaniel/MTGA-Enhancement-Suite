@@ -98,7 +98,7 @@ namespace MTGAEnhancementSuite.Firebase
                 {
                     var config = FirebaseConfig.Instance;
                     var baseUrl = config.DatabaseUrl.TrimEnd('/');
-                    var url = $"{baseUrl}/{_path}.json?auth={_authToken}";
+                    var url = $"{baseUrl}/{config.ScopePath(_path)}.json?auth={_authToken}";
 
                     var request = (HttpWebRequest)WebRequest.Create(url);
                     request.Accept = "text/event-stream";

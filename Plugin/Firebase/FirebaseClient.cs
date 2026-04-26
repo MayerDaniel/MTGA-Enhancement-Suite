@@ -50,7 +50,7 @@ namespace MTGAEnhancementSuite.Firebase
             _cachedDisplayName = displayName;
             var config = FirebaseConfig.Instance;
 
-            var tokenUrl = $"{config.FunctionUrl}/getAuthToken";
+            var tokenUrl = config.ScopeFunctionUrl($"{config.FunctionUrl}/getAuthToken");
             var tokenPayload = new JObject
             {
                 ["personaId"] = personaId,
@@ -121,6 +121,10 @@ namespace MTGAEnhancementSuite.Firebase
                         FetchFormatList();
                     }
 
+                    // Upload local MTGA card DB if newer than server's known version.
+                    // Runs once per session.
+                    StartCoroutine(CardDbUploader.CheckAndUpload());
+
                     callback?.Invoke(true);
                 }
                 else
@@ -156,7 +160,7 @@ namespace MTGAEnhancementSuite.Firebase
 
             var config = FirebaseConfig.Instance;
             var baseUrl = config.DatabaseUrl.TrimEnd('/');
-            var url = $"{baseUrl}/lobbies/{challengeId}.json?auth={_idToken}";
+            var url = $"{baseUrl}/{config.ScopePath($"lobbies/{challengeId}")}.json?auth={_idToken}";
 
             // Strip discriminator from display name for public display
             var publicName = ChallengeFormatState.StripDiscriminator(hostDisplayName);
@@ -230,7 +234,7 @@ namespace MTGAEnhancementSuite.Firebase
 
                 var config = FirebaseConfig.Instance;
                 var baseUrl = config.DatabaseUrl.TrimEnd('/');
-                var url = $"{baseUrl}/lobbies/{challengeId}/lastHeartbeat.json?auth={_idToken}";
+                var url = $"{baseUrl}/{config.ScopePath($"lobbies/{challengeId}/lastHeartbeat")}.json?auth={_idToken}";
                 var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
 
                 using (var request = new UnityWebRequest(url, "PUT"))
@@ -275,7 +279,8 @@ namespace MTGAEnhancementSuite.Firebase
 
             var config = FirebaseConfig.Instance;
             var baseUrl = config.DatabaseUrl.TrimEnd('/');
-            var url = $"{baseUrl}/lobbies/{challengeId}.json?auth={_idToken}";
+            var lobbyPath = config.ScopePath($"lobbies/{challengeId}");
+            var url = $"{baseUrl}/{lobbyPath}.json?auth={_idToken}";
 
             Plugin.Log.LogInfo($"PatchLobby: {challengeId} token_len={_idToken?.Length} fields={jsonFields}");
 
@@ -312,7 +317,7 @@ namespace MTGAEnhancementSuite.Firebase
                     }
 
                     Plugin.Log.LogInfo("Patch Lobby: Token refreshed, retrying...");
-                    var retryUrl = $"{baseUrl}/lobbies/{challengeId}.json?auth={_idToken}";
+                    var retryUrl = $"{baseUrl}/{lobbyPath}.json?auth={_idToken}";
 
                     using (var retry = new UnityWebRequest(retryUrl, "PATCH"))
                     {
@@ -380,7 +385,7 @@ namespace MTGAEnhancementSuite.Firebase
 
             var config = FirebaseConfig.Instance;
             var baseUrl = config.DatabaseUrl.TrimEnd('/');
-            var url = $"{baseUrl}/lobbies/{challengeId}.json?auth={_idToken}";
+            var url = $"{baseUrl}/{config.ScopePath($"lobbies/{challengeId}")}.json?auth={_idToken}";
 
             using (var request = UnityWebRequest.Delete(url))
             {
@@ -416,7 +421,7 @@ namespace MTGAEnhancementSuite.Firebase
             var config = FirebaseConfig.Instance;
             var baseUrl = config.DatabaseUrl.TrimEnd('/');
             // Fetch all lobbies — filter client-side for isPublic and freshness
-            var url = $"{baseUrl}/lobbies.json?auth={_idToken}";
+            var url = $"{baseUrl}/{config.ScopePath("lobbies")}.json?auth={_idToken}";
 
             using (var request = UnityWebRequest.Get(url))
             {
@@ -504,7 +509,7 @@ namespace MTGAEnhancementSuite.Firebase
 
             var config = FirebaseConfig.Instance;
             var baseUrl = config.DatabaseUrl.TrimEnd('/');
-            var url = $"{baseUrl}/{path}.json?auth={_idToken}";
+            var url = $"{baseUrl}/{config.ScopePath(path)}.json?auth={_idToken}";
 
             using (var request = UnityWebRequest.Get(url))
             {
@@ -666,7 +671,7 @@ namespace MTGAEnhancementSuite.Firebase
         private IEnumerator CallCloudFunctionCoroutine(string functionName, string jsonBody, Action<bool, string> callback)
         {
             var fnConfig = FirebaseConfig.Instance;
-            var url = $"{fnConfig.FunctionUrl}/{functionName}";
+            var url = fnConfig.ScopeFunctionUrl($"{fnConfig.FunctionUrl}/{functionName}");
             Plugin.Log.LogInfo($"CallCloudFunction: POST {url} ({jsonBody.Length} bytes)");
 
             using (var request = new UnityWebRequest(url, "POST"))

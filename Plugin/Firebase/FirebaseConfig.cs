@@ -12,6 +12,37 @@ namespace MTGAEnhancementSuite.Firebase
         public string FunctionUrl { get; set; }
         public string ProjectId { get; set; }
 
+        /// <summary>
+        /// "prod" (default) or "staging". Staging routes all reads/writes to /staging/* paths
+        /// and Discord webhooks to test channels. Set in config.json:
+        ///   { "Environment": "staging", ... }
+        /// </summary>
+        public string Environment { get; set; } = "prod";
+
+        public bool IsStaging => string.Equals(Environment, "staging", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Returns the Firebase database path with environment prefix applied.
+        /// E.g. "lobbies/abc" -> "staging/lobbies/abc" when Environment=="staging".
+        /// </summary>
+        public string ScopePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+            if (!IsStaging) return path;
+            return "staging/" + path.TrimStart('/');
+        }
+
+        /// <summary>
+        /// Returns the Cloud Function URL with the env query param appended when staging.
+        /// </summary>
+        public string ScopeFunctionUrl(string baseUrl)
+        {
+            if (string.IsNullOrEmpty(baseUrl)) return baseUrl;
+            if (!IsStaging) return baseUrl;
+            var sep = baseUrl.Contains("?") ? "&" : "?";
+            return baseUrl + sep + "env=staging";
+        }
+
         private static FirebaseConfig _instance;
 
         public static FirebaseConfig Instance
