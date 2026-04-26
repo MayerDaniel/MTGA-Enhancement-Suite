@@ -18,7 +18,11 @@ function Write-Step($msg) {
 function Invoke-Sync($format) {
     Write-Step "Syncing $format..."
     try {
-        $resp = curl.exe -X POST "$FunctionsUrl/syncFormatsHttp?format=$format" -m 540
+        $resp = curl.exe -X POST "$FunctionsUrl/syncFormatsHttp?format=$format" `
+            -H "Content-Type: application/json" `
+            -H "Content-Length: 0" `
+            --data "" `
+            -m 540
         Write-Host $resp
     } catch {
         Write-Host "  WARNING: $format sync request failed or timed out (function may still be running)" -ForegroundColor Yellow

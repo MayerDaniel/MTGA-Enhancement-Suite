@@ -268,7 +268,69 @@ namespace MTGAEnhancementSuite.Patches
 
             ApplyFormatSpinnerState(spinner, widget);
 
+            // Add a "Search…" button next to the spinner that opens the searchable
+            // GameModePicker — useful when there are many user-defined modes.
+            InjectSearchButton(parent, cloneRect, widget, spinner);
+
             Plugin.Log.LogInfo("Format spinner injected");
+        }
+
+        private const string FormatSearchBtnName = "MTGAES_FormatSearchBtn";
+
+        private static void InjectSearchButton(Transform parent, RectTransform spinnerRect,
+            UnifiedChallengeBladeWidget widget, Spinner_OptionSelector spinner)
+        {
+            // Don't double-inject
+            if (parent.Find(FormatSearchBtnName) != null) return;
+
+            var btn = new GameObject(FormatSearchBtnName);
+            btn.transform.SetParent(parent, false);
+
+            var rect = btn.AddComponent<RectTransform>();
+            // Place to the right of the spinner, narrow strip
+            rect.anchorMin = new Vector2(0.86f, 1f);
+            rect.anchorMax = new Vector2(0.99f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, spinnerRect.anchoredPosition.y - 4);
+            rect.sizeDelta = new Vector2(0f, spinnerRect.sizeDelta.y * 0.7f);
+
+            // Canvas override so we render on top of MTGA's UI
+            var canvas = btn.AddComponent<Canvas>();
+            canvas.overrideSorting = true;
+            canvas.sortingOrder = 51;
+            btn.AddComponent<GraphicRaycaster>();
+
+            btn.AddComponent<Image>().color = new Color(0.2f, 0.3f, 0.5f, 0.9f);
+            var button = btn.AddComponent<Button>();
+
+            var labelObj = new GameObject("Text");
+            labelObj.transform.SetParent(btn.transform, false);
+            var labelRect = labelObj.AddComponent<RectTransform>();
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.sizeDelta = Vector2.zero;
+            var tmp = labelObj.AddComponent<TMPro.TextMeshProUGUI>();
+            tmp.text = "Search…";
+            tmp.fontSize = 13;
+            tmp.color = Color.white;
+            tmp.alignment = TMPro.TextAlignmentOptions.Center;
+
+            var widgetRef = widget;
+            var spinnerRef = spinner;
+            button.onClick.AddListener(new UnityAction(() =>
+            {
+                if (ChallengeFormatState.IsJoining)
+                {
+                    UI.Toast.Info("Format is locked when joining a lobby.");
+                    return;
+                }
+                UI.GameModePicker.Open(ChallengeFormatState.SelectedFormat, mode =>
+                {
+                    if (mode == null) return;
+                    int idx = Array.IndexOf(ChallengeFormatState.FormatKeys, mode.Id);
+                    if (idx >= 0 && spinnerRef != null) spinnerRef.SelectOption(idx);
+                });
+            }));
         }
 
         private static void ApplyFormatSpinnerState(Spinner_OptionSelector spinner, UnifiedChallengeBladeWidget widget)

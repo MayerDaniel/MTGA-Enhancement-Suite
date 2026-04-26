@@ -21,7 +21,13 @@ namespace MTGAEnhancementSuite.UI
         private static TextMeshProUGUI _statusText;
         private static Coroutine _refreshCoroutine;
         private static MonoBehaviour _coroutineRunner;
-        private static string _filterFormat = "all"; // "all" = show everything
+        // Server browser format filter — multi-select.
+        // Empty set = show everything (default).
+        // Contains "__none__" sentinel = show nothing (after Select None click).
+        // Otherwise = whitelist of mode IDs to show.
+        private static HashSet<string> _selectedFilters = new HashSet<string>();
+        private static List<GameObject> _filterButtons = new List<GameObject>();
+        private static Dictionary<string, GameObject> _filterButtonsByKey = new Dictionary<string, GameObject>();
 
         // Tab system
         private static GameObject _browserContent;
@@ -146,7 +152,7 @@ namespace MTGAEnhancementSuite.UI
             _statusText.color = new Color(0.6f, 0.6f, 0.7f);
             _statusText.alignment = TextAlignmentOptions.Left;
 
-            // Format filter row
+            // Format filter row — multi-select chips with select-all / select-none controls
             var filterRow = CreateChild(_browserContent.transform, "FilterRow");
             var filterRowRect = filterRow.GetComponent<RectTransform>();
             filterRowRect.anchorMin = new Vector2(0.05f, 0.80f);
@@ -156,7 +162,7 @@ namespace MTGAEnhancementSuite.UI
             var filterLabel = CreateChild(filterRow.transform, "FilterLabel");
             var filterLabelRect = filterLabel.GetComponent<RectTransform>();
             filterLabelRect.anchorMin = new Vector2(0f, 0f);
-            filterLabelRect.anchorMax = new Vector2(0.15f, 1f);
+            filterLabelRect.anchorMax = new Vector2(0.10f, 1f);
             filterLabelRect.sizeDelta = Vector2.zero;
             var filterLabelText = filterLabel.AddComponent<TextMeshProUGUI>();
             filterLabelText.text = "Filter:";
@@ -164,48 +170,65 @@ namespace MTGAEnhancementSuite.UI
             filterLabelText.color = new Color(0.7f, 0.7f, 0.8f);
             filterLabelText.alignment = TextAlignmentOptions.Left;
 
-            // "All" button
-            var allBtn = CreateButton(filterRow.transform, "FilterAll", "All",
-                new Vector2(0.16f, 0.05f), new Vector2(0.28f, 0.95f));
-            allBtn.GetComponent<Image>().color = new Color(0.3f, 0.5f, 0.7f, 0.9f); // highlighted by default
-            var allBtnRef = allBtn;
+            // Select all / Select none buttons
+            var selectAllBtn = CreateButton(filterRow.transform, "FilterSelectAll", "All",
+                new Vector2(0.10f, 0.05f), new Vector2(0.20f, 0.95f));
+            selectAllBtn.GetComponent<Image>().color = new Color(0.2f, 0.4f, 0.5f, 0.9f);
+            selectAllBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
+            {
+                _selectedFilters.Clear(); // empty = show all
+                UpdateAllFilterButtonStates();
+                RefreshLobbies();
+            }));
 
-            // Build format filter buttons from loaded formats
+            var selectNoneBtn = CreateButton(filterRow.transform, "FilterSelectNone", "None",
+                new Vector2(0.21f, 0.05f), new Vector2(0.30f, 0.95f));
+            selectNoneBtn.GetComponent<Image>().color = new Color(0.4f, 0.2f, 0.2f, 0.9f);
+            selectNoneBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
+            {
+                _selectedFilters.Clear();
+                _selectedFilters.Add("__none__"); // sentinel — match nothing
+                UpdateAllFilterButtonStates();
+                RefreshLobbies();
+            }));
+
+            // Build per-mode filter chips. Skip the "none" id and the sentinel.
             var formatKeys = ChallengeFormatState.FormatKeys;
             var formatOptions = ChallengeFormatState.FormatOptions;
-            var filterButtons = new List<GameObject> { allBtn };
+            _filterButtons.Clear();
+            _filterButtonsByKey.Clear();
 
-            float btnStart = 0.30f;
-            float btnWidth = 0.14f;
+            float btnStart = 0.32f;
             float btnGap = 0.01f;
-            for (int i = 1; i < formatKeys.Length && i < 6; i++) // skip "none", max 5 format buttons
+            // Adapt button width to fit the available horizontal space.
+            int chipCount = Math.Min(formatKeys.Length - 1, 5);
+            float available = 0.96f - btnStart;
+            float btnWidth = chipCount > 0
+                ? Math.Max(0.10f, (available / chipCount) - btnGap)
+                : 0.14f;
+
+            for (int i = 1; i < formatKeys.Length && i - 1 < chipCount; i++)
             {
                 float left = btnStart + (i - 1) * (btnWidth + btnGap);
                 float right = left + btnWidth;
                 var fmtBtn = CreateButton(filterRow.transform, $"Filter_{formatKeys[i]}", formatOptions[i],
                     new Vector2(left, 0.05f), new Vector2(right, 0.95f));
                 fmtBtn.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.25f, 0.9f);
-                filterButtons.Add(fmtBtn);
+                _filterButtons.Add(fmtBtn);
+                _filterButtonsByKey[formatKeys[i]] = fmtBtn;
 
                 var capturedKey = formatKeys[i];
-                var capturedButtons = filterButtons;
-                var capturedIdx = filterButtons.Count - 1;
                 fmtBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
                 {
-                    _filterFormat = capturedKey;
-                    HighlightFilterButton(capturedButtons, capturedIdx);
+                    _selectedFilters.Remove("__none__");
+                    if (_selectedFilters.Contains(capturedKey)) _selectedFilters.Remove(capturedKey);
+                    else _selectedFilters.Add(capturedKey);
+                    UpdateAllFilterButtonStates();
                     RefreshLobbies();
                 }));
             }
 
-            // Wire up the All button
-            var allFilterButtons = filterButtons;
-            allBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
-            {
-                _filterFormat = "all";
-                HighlightFilterButton(allFilterButtons, 0);
-                RefreshLobbies();
-            }));
+            UpdateAllFilterButtonStates();
 
             // Lobby list scroll area
             var scrollArea = CreateChild(_browserContent.transform, "ScrollArea");
@@ -500,7 +523,7 @@ namespace MTGAEnhancementSuite.UI
                     var isBo3 = lobby["isBestOf3"]?.Value<bool>() ?? false;
 
                     // Apply format filter
-                    if (_filterFormat != "all" && format != _filterFormat)
+                    if (!FilterAllowsFormat(format))
                         continue;
 
                     CreateLobbyRow(challengeId, hostName, format, isBo3);
@@ -514,15 +537,28 @@ namespace MTGAEnhancementSuite.UI
             });
         }
 
-        private static void HighlightFilterButton(List<GameObject> buttons, int activeIndex)
+        /// <summary>
+        /// True if a lobby with the given format key passes the current filter.
+        /// Empty selection = show all (legacy "All" behavior).
+        /// "__none__" sentinel = show nothing.
+        /// </summary>
+        private static bool FilterAllowsFormat(string format)
         {
-            for (int i = 0; i < buttons.Count; i++)
+            if (_selectedFilters.Count == 0) return true;
+            if (_selectedFilters.Contains("__none__")) return false;
+            return _selectedFilters.Contains(format);
+        }
+
+        private static void UpdateAllFilterButtonStates()
+        {
+            foreach (var kvp in _filterButtonsByKey)
             {
-                var img = buttons[i].GetComponent<Image>();
-                if (img != null)
-                    img.color = i == activeIndex
-                        ? new Color(0.3f, 0.5f, 0.7f, 0.9f)   // highlighted
-                        : new Color(0.15f, 0.15f, 0.25f, 0.9f); // default
+                var img = kvp.Value.GetComponent<Image>();
+                if (img == null) continue;
+                bool selected = _selectedFilters.Contains(kvp.Key);
+                img.color = selected
+                    ? new Color(0.3f, 0.5f, 0.7f, 0.9f)   // selected
+                    : new Color(0.15f, 0.15f, 0.25f, 0.9f); // unselected
             }
         }
 

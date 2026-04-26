@@ -235,6 +235,7 @@
 
     <script>
         var FUNCTIONS_URL = 'https://us-central1-mtga-enhancement-suite.cloudfunctions.net';
+        var ENV = (new URLSearchParams(window.location.search)).get('env') === 'staging' ? 'staging' : 'prod';
 
         var parts = window.location.pathname.split('/').filter(Boolean);
         var challengeId = parts[1] || '';
@@ -311,7 +312,7 @@
             statusEl.className = 'join-status pending';
             statusEl.textContent = 'Sending request...';
 
-            fetch(FUNCTIONS_URL + '/submitJoinRequest', {
+            fetch(FUNCTIONS_URL + '/submitJoinRequest?env=' + ENV, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ challengeId: challengeId, username: username })

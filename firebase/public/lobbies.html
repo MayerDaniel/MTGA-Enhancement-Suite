@@ -259,7 +259,8 @@
         </div>
 
         <div class="filter-bar" id="filterBar">
-            <button class="filter-btn active" data-filter="all" onclick="setFilter('all', this)">All</button>
+            <button class="filter-btn active" data-action="all" onclick="selectAllFilters()">Select All</button>
+            <button class="filter-btn" data-action="none" onclick="selectNoFilters()">Select None</button>
         </div>
 
         <div class="lobby-list" id="lobbyList"></div>
@@ -273,8 +274,10 @@
 
     <script>
         var FUNCTIONS_URL = 'https://us-central1-mtga-enhancement-suite.cloudfunctions.net';
+        var ENV = (new URLSearchParams(window.location.search)).get('env') === 'staging' ? 'staging' : 'prod';
         var allLobbies = [];
-        var currentFilter = 'all';
+        // Multi-select filter: empty Set = show all, otherwise whitelist of format keys.
+        var selectedFilters = new Set();
         var refreshTimer = null;
 
         // --- Username persistence ---
@@ -319,11 +322,25 @@
             return FORMAT_DISPLAY[key] || key.charAt(0).toUpperCase() + key.slice(1);
         }
 
-        // --- Filter ---
-        function setFilter(filter, btn) {
-            currentFilter = filter;
-            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
-            btn.classList.add('active');
+        // --- Multi-select filter ---
+        function toggleFilter(key) {
+            if (selectedFilters.has(key)) selectedFilters.delete(key);
+            else selectedFilters.add(key);
+            buildFilterBar();
+            renderLobbies();
+        }
+
+        function selectAllFilters() {
+            selectedFilters.clear(); // empty = show all
+            buildFilterBar();
+            renderLobbies();
+        }
+
+        function selectNoFilters() {
+            // Use a sentinel "__none__" to distinguish "show none" from "show all".
+            selectedFilters.clear();
+            selectedFilters.add('__none__');
+            buildFilterBar();
             renderLobbies();
         }
 
@@ -334,24 +351,30 @@
             });
 
             var bar = document.getElementById('filterBar');
-            // Keep the All button, remove others
-            bar.innerHTML = '<button class="filter-btn' + (currentFilter === 'all' ? ' active' : '') +
-                '" data-filter="all" onclick="setFilter(\'all\', this)">All</button>';
+            var allActive = selectedFilters.size === 0 ? ' active' : '';
+            var noneActive = selectedFilters.has('__none__') ? ' active' : '';
+            bar.innerHTML =
+                '<button class="filter-btn' + allActive + '" onclick="selectAllFilters()">Select All</button>' +
+                '<button class="filter-btn' + noneActive + '" onclick="selectNoFilters()">Select None</button>';
 
             Object.keys(formats).sort().forEach(function(f) {
-                var active = currentFilter === f ? ' active' : '';
+                var active = selectedFilters.has(f) ? ' active' : '';
                 bar.innerHTML += '<button class="filter-btn' + active +
-                    '" data-filter="' + f + '" onclick="setFilter(\'' + f + '\', this)">' +
+                    '" data-filter="' + f + '" onclick="toggleFilter(\'' + f + '\')">' +
                     formatName(f) + '</button>';
             });
+        }
+
+        function passesFilter(lobby) {
+            if (selectedFilters.size === 0) return true;
+            if (selectedFilters.has('__none__')) return false;
+            return selectedFilters.has(lobby.format);
         }
 
         // --- Lobby rendering ---
         function renderLobbies() {
             var list = document.getElementById('lobbyList');
-            var filtered = currentFilter === 'all'
-                ? allLobbies
-                : allLobbies.filter(function(l) { return l.format === currentFilter; });
+            var filtered = allLobbies.filter(passesFilter);
 
             if (filtered.length === 0) {
                 list.innerHTML = '<div class="empty-state">' +
@@ -414,7 +437,7 @@
             btn.classList.add('sending');
             btn.textContent = 'Sending...';
 
-            fetch(FUNCTIONS_URL + '/submitJoinRequest', {
+            fetch(FUNCTIONS_URL + '/submitJoinRequest?env=' + ENV, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ challengeId: lobbyId, username: username })
@@ -444,7 +467,7 @@
         function refreshLobbies() {
             document.getElementById('status').textContent = 'Loading...';
 
-            fetch(FUNCTIONS_URL + '/listPublicLobbies')
+            fetch(FUNCTIONS_URL + '/listPublicLobbies?env=' + ENV)
             .then(function(resp) { return resp.json(); })
             .then(function(data) {
                 allLobbies = data.lobbies || [];
