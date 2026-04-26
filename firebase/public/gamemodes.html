@@ -348,6 +348,13 @@
                         <label for="f-bo3">Best of 3 (uncheck for Bo1)</label>
                     </div>
                 </div>
+                <div class="form-row">
+                    <label>Discord webhook</label>
+                    <div>
+                        <input type="text" id="f-discordWebhook" value="${escape(mode.discordWebhookUrl || '')}" placeholder="https://discord.com/api/webhooks/...">
+                        <div class="help">Optional. When set, lobbies for this mode also notify this Discord webhook (in addition to the master MTGA+ channel).</div>
+                    </div>
+                </div>
 
                 <h3 style="color:#fff;margin-top:20px;margin-bottom:10px;">Card legality</h3>
                 <div class="tabs">
@@ -570,6 +577,7 @@
             description: document.getElementById('f-description').value.trim(),
             matchType: document.getElementById('f-matchType').value,
             isBestOf3Default: document.getElementById('f-bo3').checked,
+            discordWebhookUrl: document.getElementById('f-discordWebhook').value.trim(),
             legalitySource: legalitySource,
             postProcessing: pp,
         };

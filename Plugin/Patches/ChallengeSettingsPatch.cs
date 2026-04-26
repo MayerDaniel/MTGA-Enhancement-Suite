@@ -228,16 +228,30 @@ namespace MTGAEnhancementSuite.Patches
             spinner = clone.GetComponent<Spinner_OptionSelector>();
             if (spinner == null) return;
 
+            // Disable the spinner's prev/next button functionality — we replace
+            // it with a click-to-open dropdown. We hide the arrow buttons but
+            // keep the spinner alive (it preserves layout, sizing, and lets us
+            // call SelectOption(index) to update the value label after a pick).
             spinner.onValueChanged.RemoveAllListeners();
             spinner.ClearOptions();
             spinner.AddOptions(new List<string>(ChallengeFormatState.FormatOptions));
 
-            // Wire up change listener
+            HideSpinnerArrows(clone.transform);
+
+            // Make the whole spinner clickable as a single button that opens
+            // the searchable game-mode picker.
+            ConvertSpinnerToDropdownButton(clone, spinner, parent, widget);
+
+            // Wire the underlying spinner's onValueChanged so when the picker
+            // calls SelectOption(idx), all the existing format-change side
+            // effects (Firebase push, deck clear, matchType, button visibility)
+            // run through the same path as before.
             var widgetRef = widget;
             spinner.onValueChanged.AddListener(new UnityAction<int, string>((index, value) =>
             {
-                if (ChallengeFormatState.IsJoining) return; // Don't allow changes when joining
+                if (ChallengeFormatState.IsJoining) return;
 
+                if (index < 0 || index >= ChallengeFormatState.FormatKeys.Length) return;
                 ChallengeFormatState.SelectedFormat = ChallengeFormatState.FormatKeys[index];
                 Plugin.Log.LogInfo($"Format changed to: {ChallengeFormatState.SelectedFormat}");
                 PerPlayerLog.Info($"Format changed to: {ChallengeFormatState.SelectedFormat} (ActiveChallengeId={ChallengeFormatState.ActiveChallengeId}, IsJoining={ChallengeFormatState.IsJoining})");
@@ -248,7 +262,6 @@ namespace MTGAEnhancementSuite.Patches
                     catch (Exception ex) { Plugin.Log.LogWarning($"Could not clear deck: {ex.Message}"); }
                 }
 
-                // Host: push format change to Firebase so joiner's SSE listener picks it up
                 if (!ChallengeFormatState.IsJoining && ChallengeFormatState.ActiveChallengeId != Guid.Empty)
                 {
                     FirebaseClient.Instance.UpdateLobbyFormat(
@@ -256,27 +269,89 @@ namespace MTGAEnhancementSuite.Patches
                         ChallengeFormatState.SelectedFormat);
                     Plugin.Log.LogInfo($"Pushed format change to Firebase: {ChallengeFormatState.SelectedFormat}");
                     PerPlayerLog.Info($"Pushed format change to Firebase: {ChallengeFormatState.SelectedFormat}");
-
-                    // Apply the gameMode's MatchType (e.g. switch DirectGame to
-                    // DirectGameAlchemy for rebalanced formats) onto the active challenge.
                     PushMatchTypeForCurrentMode();
                 }
 
-                // Show/hide buttons based on format selection
                 UpdateButtonVisibility(parent);
             }));
 
             ApplyFormatSpinnerState(spinner, widget);
 
-            // Add a "Search…" button next to the spinner that opens the searchable
-            // GameModePicker — useful when there are many user-defined modes.
-            InjectSearchButton(parent, cloneRect, widget, spinner);
-
-            Plugin.Log.LogInfo("Format spinner injected");
+            Plugin.Log.LogInfo("Format dropdown injected (spinner repurposed as button)");
         }
 
-        private const string FormatSearchBtnName = "MTGAES_FormatSearchBtn";
+        /// <summary>Hides the prev/next arrows on a cloned Spinner_OptionSelector.</summary>
+        private static void HideSpinnerArrows(Transform spinnerRoot)
+        {
+            foreach (var btn in spinnerRoot.GetComponentsInChildren<Button>(true))
+            {
+                var n = btn.gameObject.name.ToLower();
+                if (n.Contains("next") || n.Contains("previous") || n.Contains("prev") ||
+                    n.Contains("arrow") || n.Contains("left") || n.Contains("right"))
+                {
+                    btn.gameObject.SetActive(false);
+                }
+            }
+        }
 
+        /// <summary>
+        /// Adds a full-area Button on the spinner root so clicking anywhere on
+        /// the spinner opens the GameModePicker. Also appends a small ▾ glyph
+        /// to the value label so users see this is a dropdown.
+        /// </summary>
+        private static void ConvertSpinnerToDropdownButton(GameObject spinnerRoot,
+            Spinner_OptionSelector spinner, Transform parent, UnifiedChallengeBladeWidget widget)
+        {
+            // Add an Image (transparent, raycast-only) sitting over the whole spinner
+            var hitObj = new GameObject("MTGAES_DropdownHit");
+            hitObj.transform.SetParent(spinnerRoot.transform, false);
+            var hitRect = hitObj.AddComponent<RectTransform>();
+            hitRect.anchorMin = Vector2.zero;
+            hitRect.anchorMax = Vector2.one;
+            hitRect.sizeDelta = Vector2.zero;
+            hitRect.SetAsLastSibling();
+
+            var hitImg = hitObj.AddComponent<Image>();
+            hitImg.color = new Color(0f, 0f, 0f, 0f); // transparent
+            hitImg.raycastTarget = true;
+
+            var btnComp = hitObj.AddComponent<Button>();
+            btnComp.transition = Selectable.Transition.None;
+            btnComp.onClick.AddListener(new UnityAction(() =>
+            {
+                if (ChallengeFormatState.IsJoining)
+                {
+                    UI.Toast.Info("Format is locked when joining a lobby.");
+                    return;
+                }
+                var spinnerRef = spinner;
+                UI.GameModePicker.Open(ChallengeFormatState.SelectedFormat, mode =>
+                {
+                    if (mode == null) return;
+                    int idx = Array.IndexOf(ChallengeFormatState.FormatKeys, mode.Id);
+                    if (idx >= 0 && spinnerRef != null) spinnerRef.SelectOption(idx);
+                });
+            }));
+
+            // Append a small ▾ next to the value label (or wherever the label is)
+            // by adding a child to the spinner with right-aligned text.
+            var caretObj = new GameObject("MTGAES_DropdownCaret");
+            caretObj.transform.SetParent(spinnerRoot.transform, false);
+            var caretRect = caretObj.AddComponent<RectTransform>();
+            caretRect.anchorMin = new Vector2(0.85f, 0f);
+            caretRect.anchorMax = new Vector2(0.98f, 1f);
+            caretRect.sizeDelta = Vector2.zero;
+            var caretTmp = caretObj.AddComponent<TMPro.TextMeshProUGUI>();
+            caretTmp.text = "▾";
+            caretTmp.fontSize = 22;
+            caretTmp.color = new Color(0.7f, 0.7f, 0.85f);
+            caretTmp.alignment = TMPro.TextAlignmentOptions.MidlineRight;
+            caretTmp.raycastTarget = false;
+        }
+
+        private const string FormatSearchBtnName = "MTGAES_FormatSearchBtn"; // legacy, kept for compat
+
+        // (Legacy path no longer used — kept temporarily so existing callers compile.)
         private static void InjectSearchButton(Transform parent, RectTransform spinnerRect,
             UnifiedChallengeBladeWidget widget, Spinner_OptionSelector spinner)
         {

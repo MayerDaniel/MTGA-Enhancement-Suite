@@ -26,6 +26,8 @@ namespace MTGAEnhancementSuite.UI
         // Contains "__none__" sentinel = show nothing (after Select None click).
         // Otherwise = whitelist of mode IDs to show.
         private static HashSet<string> _selectedFilters = new HashSet<string>();
+        private static string _filterSearchText = "";
+        private static TMP_InputField _filterSearchField;
         private static List<GameObject> _filterButtons = new List<GameObject>();
         private static Dictionary<string, GameObject> _filterButtonsByKey = new Dictionary<string, GameObject>();
 
@@ -152,73 +154,127 @@ namespace MTGAEnhancementSuite.UI
             _statusText.color = new Color(0.6f, 0.6f, 0.7f);
             _statusText.alignment = TextAlignmentOptions.Left;
 
-            // Format filter row — multi-select chips with select-all / select-none controls
+            // Format filter row — search input + Select All / None controls + searchable chip strip
             var filterRow = CreateChild(_browserContent.transform, "FilterRow");
             var filterRowRect = filterRow.GetComponent<RectTransform>();
-            filterRowRect.anchorMin = new Vector2(0.05f, 0.80f);
-            filterRowRect.anchorMax = new Vector2(0.95f, 0.86f);
+            filterRowRect.anchorMin = new Vector2(0.03f, 0.69f);
+            filterRowRect.anchorMax = new Vector2(0.97f, 0.86f);
             filterRowRect.sizeDelta = Vector2.zero;
 
-            var filterLabel = CreateChild(filterRow.transform, "FilterLabel");
-            var filterLabelRect = filterLabel.GetComponent<RectTransform>();
-            filterLabelRect.anchorMin = new Vector2(0f, 0f);
-            filterLabelRect.anchorMax = new Vector2(0.10f, 1f);
-            filterLabelRect.sizeDelta = Vector2.zero;
-            var filterLabelText = filterLabel.AddComponent<TextMeshProUGUI>();
-            filterLabelText.text = "Filter:";
-            filterLabelText.fontSize = 16;
-            filterLabelText.color = new Color(0.7f, 0.7f, 0.8f);
-            filterLabelText.alignment = TextAlignmentOptions.Left;
+            // -- Top half: search input + Select All / Select None --
+            var searchObj = CreateChild(filterRow.transform, "FilterSearch");
+            var searchRect = searchObj.GetComponent<RectTransform>();
+            searchRect.anchorMin = new Vector2(0f, 0.55f);
+            searchRect.anchorMax = new Vector2(0.55f, 0.95f);
+            searchRect.sizeDelta = Vector2.zero;
+            searchObj.AddComponent<Image>().color = new Color(0.15f, 0.15f, 0.22f, 1f);
+            _filterSearchField = searchObj.AddComponent<TMP_InputField>();
 
-            // Select all / Select none buttons
+            var sTextArea = CreateChild(searchObj.transform, "TextArea");
+            StretchFull(sTextArea);
+            sTextArea.AddComponent<RectMask2D>();
+            var sTextObj = CreateChild(sTextArea.transform, "Text");
+            StretchFull(sTextObj);
+            var sTextTmp = sTextObj.AddComponent<TextMeshProUGUI>();
+            sTextTmp.fontSize = 14;
+            sTextTmp.color = Color.white;
+            sTextTmp.alignment = TextAlignmentOptions.Left;
+            sTextTmp.margin = new Vector4(8, 0, 8, 0);
+            _filterSearchField.textComponent = sTextTmp;
+            _filterSearchField.textViewport = sTextArea.GetComponent<RectTransform>();
+
+            var sPh = CreateChild(sTextArea.transform, "Placeholder");
+            StretchFull(sPh);
+            var sPhTmp = sPh.AddComponent<TextMeshProUGUI>();
+            sPhTmp.text = "Search formats...";
+            sPhTmp.fontSize = 14;
+            sPhTmp.color = new Color(0.4f, 0.4f, 0.5f);
+            sPhTmp.fontStyle = FontStyles.Italic;
+            sPhTmp.alignment = TextAlignmentOptions.Left;
+            sPhTmp.margin = new Vector4(8, 0, 8, 0);
+            _filterSearchField.placeholder = sPhTmp;
+
+            _filterSearchField.onValueChanged.AddListener(new UnityAction<string>(s =>
+            {
+                _filterSearchText = s ?? "";
+                ApplyChipFilter();
+            }));
+
+            // Select All / Select None
             var selectAllBtn = CreateButton(filterRow.transform, "FilterSelectAll", "All",
-                new Vector2(0.10f, 0.05f), new Vector2(0.20f, 0.95f));
+                new Vector2(0.57f, 0.55f), new Vector2(0.74f, 0.95f));
             selectAllBtn.GetComponent<Image>().color = new Color(0.2f, 0.4f, 0.5f, 0.9f);
             selectAllBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
             {
-                _selectedFilters.Clear(); // empty = show all
+                _selectedFilters.Clear();
                 UpdateAllFilterButtonStates();
                 RefreshLobbies();
             }));
 
             var selectNoneBtn = CreateButton(filterRow.transform, "FilterSelectNone", "None",
-                new Vector2(0.21f, 0.05f), new Vector2(0.30f, 0.95f));
+                new Vector2(0.76f, 0.55f), new Vector2(0.93f, 0.95f));
             selectNoneBtn.GetComponent<Image>().color = new Color(0.4f, 0.2f, 0.2f, 0.9f);
             selectNoneBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
             {
                 _selectedFilters.Clear();
-                _selectedFilters.Add("__none__"); // sentinel — match nothing
+                _selectedFilters.Add("__none__");
                 UpdateAllFilterButtonStates();
                 RefreshLobbies();
             }));
 
-            // Build per-mode filter chips. Skip the "none" id and the sentinel.
+            // -- Bottom half: scrollable horizontal chip strip --
+            var chipStrip = CreateChild(filterRow.transform, "ChipStrip");
+            var chipStripRect = chipStrip.GetComponent<RectTransform>();
+            chipStripRect.anchorMin = new Vector2(0f, 0f);
+            chipStripRect.anchorMax = new Vector2(1f, 0.50f);
+            chipStripRect.sizeDelta = Vector2.zero;
+
+            var chipScroll = chipStrip.AddComponent<ScrollRect>();
+            chipScroll.horizontal = true;
+            chipScroll.vertical = false;
+            chipScroll.horizontalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+
+            var chipViewport = CreateChild(chipStrip.transform, "Viewport");
+            StretchFull(chipViewport);
+            chipViewport.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.15f);
+            chipViewport.AddComponent<Mask>().showMaskGraphic = true;
+            chipScroll.viewport = chipViewport.GetComponent<RectTransform>();
+
+            var chipContent = CreateChild(chipViewport.transform, "Content");
+            var chipContentRect = chipContent.GetComponent<RectTransform>();
+            chipContentRect.anchorMin = new Vector2(0f, 0.5f);
+            chipContentRect.anchorMax = new Vector2(0f, 0.5f);
+            chipContentRect.pivot = new Vector2(0f, 0.5f);
+            chipContentRect.sizeDelta = new Vector2(0f, 0f);
+
+            var chipLayout = chipContent.AddComponent<HorizontalLayoutGroup>();
+            chipLayout.spacing = 6;
+            chipLayout.padding = new RectOffset(6, 6, 4, 4);
+            chipLayout.childForceExpandWidth = false;
+            chipLayout.childForceExpandHeight = true;
+            chipLayout.childControlWidth = false;
+            chipLayout.childControlHeight = true;
+
+            var chipFitter = chipContent.AddComponent<ContentSizeFitter>();
+            chipFitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            chipScroll.content = chipContentRect;
+
+            // Build chips for every mode (skip the "none" sentinel and "__none__")
             var formatKeys = ChallengeFormatState.FormatKeys;
             var formatOptions = ChallengeFormatState.FormatOptions;
             _filterButtons.Clear();
             _filterButtonsByKey.Clear();
 
-            float btnStart = 0.32f;
-            float btnGap = 0.01f;
-            // Adapt button width to fit the available horizontal space.
-            int chipCount = Math.Min(formatKeys.Length - 1, 5);
-            float available = 0.96f - btnStart;
-            float btnWidth = chipCount > 0
-                ? Math.Max(0.10f, (available / chipCount) - btnGap)
-                : 0.14f;
-
-            for (int i = 1; i < formatKeys.Length && i - 1 < chipCount; i++)
+            for (int i = 1; i < formatKeys.Length; i++)
             {
-                float left = btnStart + (i - 1) * (btnWidth + btnGap);
-                float right = left + btnWidth;
-                var fmtBtn = CreateButton(filterRow.transform, $"Filter_{formatKeys[i]}", formatOptions[i],
-                    new Vector2(left, 0.05f), new Vector2(right, 0.95f));
-                fmtBtn.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.25f, 0.9f);
-                _filterButtons.Add(fmtBtn);
-                _filterButtonsByKey[formatKeys[i]] = fmtBtn;
-
                 var capturedKey = formatKeys[i];
-                fmtBtn.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
+                var capturedLabel = formatOptions[i];
+                var chip = CreateChip(chipContent.transform, $"Filter_{capturedKey}", capturedLabel);
+                _filterButtons.Add(chip);
+                _filterButtonsByKey[capturedKey] = chip;
+
+                chip.GetComponent<Button>().onClick.AddListener(new UnityAction(() =>
                 {
                     _selectedFilters.Remove("__none__");
                     if (_selectedFilters.Contains(capturedKey)) _selectedFilters.Remove(capturedKey);
@@ -229,12 +285,13 @@ namespace MTGAEnhancementSuite.UI
             }
 
             UpdateAllFilterButtonStates();
+            ApplyChipFilter();
 
-            // Lobby list scroll area
+            // Lobby list scroll area — start below the filter row
             var scrollArea = CreateChild(_browserContent.transform, "ScrollArea");
             var scrollRect = scrollArea.GetComponent<RectTransform>();
             scrollRect.anchorMin = new Vector2(0.03f, 0.12f);
-            scrollRect.anchorMax = new Vector2(0.97f, 0.79f);
+            scrollRect.anchorMax = new Vector2(0.97f, 0.68f);
             scrollRect.sizeDelta = Vector2.zero;
 
             var scrollView = scrollArea.AddComponent<ScrollRect>();
@@ -560,6 +617,63 @@ namespace MTGAEnhancementSuite.UI
                     ? new Color(0.3f, 0.5f, 0.7f, 0.9f)   // selected
                     : new Color(0.15f, 0.15f, 0.25f, 0.9f); // unselected
             }
+        }
+
+        /// <summary>
+        /// Hides chips whose label/id doesn't match the search text. Empty
+        /// search shows everything.
+        /// </summary>
+        private static void ApplyChipFilter()
+        {
+            var query = (_filterSearchText ?? "").Trim().ToLowerInvariant();
+            for (int i = 0; i < _filterButtons.Count; i++)
+            {
+                var chip = _filterButtons[i];
+                var key = "";
+                foreach (var kvp in _filterButtonsByKey)
+                {
+                    if (kvp.Value == chip) { key = kvp.Key; break; }
+                }
+                var label = chip.GetComponentInChildren<TextMeshProUGUI>(true)?.text ?? "";
+                bool show = string.IsNullOrEmpty(query) ||
+                            label.ToLowerInvariant().Contains(query) ||
+                            key.ToLowerInvariant().Contains(query);
+                chip.SetActive(show);
+            }
+        }
+
+        /// <summary>
+        /// Creates a horizontal-layout chip used in the filter strip.
+        /// </summary>
+        private static GameObject CreateChip(Transform parent, string name, string label)
+        {
+            var chip = new GameObject(name);
+            chip.transform.SetParent(parent, false);
+            chip.AddComponent<RectTransform>();
+            var le = chip.AddComponent<LayoutElement>();
+            le.minWidth = 90;
+            le.preferredHeight = 30;
+            chip.AddComponent<Image>().color = new Color(0.15f, 0.15f, 0.25f, 0.9f);
+            chip.AddComponent<Button>();
+
+            var textObj = new GameObject("Text");
+            textObj.transform.SetParent(chip.transform, false);
+            var trect = textObj.AddComponent<RectTransform>();
+            trect.anchorMin = Vector2.zero;
+            trect.anchorMax = Vector2.one;
+            trect.sizeDelta = Vector2.zero;
+            var tmp = textObj.AddComponent<TextMeshProUGUI>();
+            tmp.text = label;
+            tmp.fontSize = 13;
+            tmp.color = Color.white;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.margin = new Vector4(10, 0, 10, 0);
+
+            // Make the chip width fit its label
+            var chipFitter = chip.AddComponent<ContentSizeFitter>();
+            chipFitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            return chip;
         }
 
         private static void ClearLobbyList()

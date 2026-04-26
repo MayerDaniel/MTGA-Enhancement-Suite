@@ -954,10 +954,24 @@ async function expireDiscordMessages(lobbyId, lobby, secrets, env = "prod") {
   const host = (lobby && lobby.hostDisplayName) || "Unknown";
   const format = (lobby && lobby.format) || "none";
 
+  // The "mode" channel uses a webhook URL stored in the gameMode definition.
+  // Look it up here so we can edit the message when expiring.
+  let modeWebhookUrl = null;
+  let modeDisplayName = null;
+  try {
+    const modeSnap = await admin.database().ref(scopePath(env, `gameModes/${format}`)).once("value");
+    if (modeSnap.exists()) {
+      const m = modeSnap.val();
+      if (m.discordWebhookUrl) modeWebhookUrl = m.discordWebhookUrl;
+      if (m.displayName) modeDisplayName = m.displayName;
+    }
+  } catch { /* mode may have been deleted */ }
+
   const webhookMap = {
     general: secrets.general,
     planar: secrets.planar,
     pauper: secrets.pauper,
+    mode: modeWebhookUrl,
   };
 
   // Per-channel format display names match the original webhook send logic
@@ -965,12 +979,14 @@ async function expireDiscordMessages(lobbyId, lobby, secrets, env = "prod") {
     if (format === "none") return "No Format";
     if (channel === "planar") return "Planar Standard";
     if (channel === "pauper") {
-      // pauper webhook displays "pauper" as "Vintage Pauper"
       return PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
     }
-    // general channel: use registry display name
+    if (channel === "mode") {
+      return modeDisplayName || FORMAT_REGISTRY[format]?.displayName || format;
+    }
     return FORMAT_REGISTRY[format]?.displayName ||
            PAUPER_DISPLAY_NAMES[format] ||
+           modeDisplayName ||
            format.charAt(0).toUpperCase() + format.slice(1);
   }
 
@@ -1039,40 +1055,67 @@ async function handleNotifyGeneral(event, env) {
   const host = lobby.hostDisplayName || "Unknown";
   const hostFull = lobby.hostFullName || host;
   const format = lobby.format || "none";
-  const formatDisplay = format === "none" ? "No Format" : format.charAt(0).toUpperCase() + format.slice(1);
   const bestOf = lobby.isBestOf3 ? "Bo3" : "Bo1";
   const joinUrl = `https://mtga-enhancement-suite.web.app/join/${lobbyId}?format=${encodeURIComponent(format)}`;
 
-  const webhookUrl = discordSecretsFor(env).general;
-  if (!webhookUrl) {
-    console.log(`[${env}] notifyDiscordOnPublicLobby: no webhook configured, skipping`);
-    return;
+  // Resolve mode for display name + per-mode webhook URL.
+  let modeDisplayName = format === "none"
+    ? "No Format"
+    : format.charAt(0).toUpperCase() + format.slice(1);
+  let modeWebhookUrl = null;
+  try {
+    const modeSnap = await admin.database().ref(scopePath(env, `gameModes/${format}`)).once("value");
+    if (modeSnap.exists()) {
+      const m = modeSnap.val();
+      if (m.displayName) modeDisplayName = m.displayName;
+      if (m.discordWebhookUrl) modeWebhookUrl = m.discordWebhookUrl;
+    }
+  } catch (err) {
+    console.warn(`[${env}] Could not resolve mode ${format}: ${err.message}`);
   }
 
-  try {
-    const embedMsgId = await sendWebhookMessage(webhookUrl, {
-      embeds: [{
-        title: env === "staging" ? "🧪 [STAGING] New Public Lobby" : "🎮 New Public Lobby",
-        color: 0x00ff88,
-        fields: [
-          { name: "Host", value: host, inline: true },
-          { name: "Format", value: formatDisplay, inline: true },
-          { name: "Best Of", value: bestOf, inline: true },
-        ],
-        url: joinUrl,
-        description: `**[Click to join](${joinUrl})**`,
-        timestamp: new Date().toISOString(),
-      }],
-    });
+  const buildEmbed = (titlePrefix) => ({
+    embeds: [{
+      title: titlePrefix + " New Public Lobby",
+      color: 0x00ff88,
+      fields: [
+        { name: "Host", value: host, inline: true },
+        { name: "Format", value: modeDisplayName, inline: true },
+        { name: "Best Of", value: bestOf, inline: true },
+      ],
+      url: joinUrl,
+      description: `**[Click to join](${joinUrl})**`,
+      timestamp: new Date().toISOString(),
+    }],
+  });
 
-    const usernameMsgId = await sendWebhookMessage(webhookUrl, {
-      content: `${hostFull}`,
-    });
+  // 1) Master webhook — fires for EVERY public lobby across all modes.
+  const masterWebhookUrl = discordSecretsFor(env).general;
+  if (masterWebhookUrl) {
+    try {
+      const titlePrefix = env === "staging" ? "🧪 [STAGING]" : "🎮";
+      const embedMsgId = await sendWebhookMessage(masterWebhookUrl, buildEmbed(titlePrefix));
+      const usernameMsgId = await sendWebhookMessage(masterWebhookUrl, { content: `${hostFull}` });
+      await storeMessageIds(lobbyId, "general", embedMsgId, usernameMsgId, env);
+      console.log(`[${env}] Master Discord notified: ${host} hosting ${modeDisplayName} (${lobbyId})`);
+    } catch (err) {
+      console.error(`[${env}] Master Discord webhook error: ${err.message}`);
+    }
+  } else {
+    console.log(`[${env}] notifyDiscordOnPublicLobby: no master webhook configured, skipping`);
+  }
 
-    await storeMessageIds(lobbyId, "general", embedMsgId, usernameMsgId, env);
-    console.log(`[${env}] Discord notified: ${host} hosting ${formatDisplay} (${lobbyId}), msgIds: ${embedMsgId}, ${usernameMsgId}`);
-  } catch (err) {
-    console.error(`[${env}] Discord webhook error: ${err.message}`);
+  // 2) Per-mode webhook — fires when the mode definition has discordWebhookUrl set.
+  if (modeWebhookUrl) {
+    try {
+      const titlePrefix = env === "staging" ? "🧪 [STAGING]" : "🎮";
+      const embedMsgId = await sendWebhookMessage(modeWebhookUrl, buildEmbed(titlePrefix));
+      const usernameMsgId = await sendWebhookMessage(modeWebhookUrl, { content: `${hostFull}` });
+      await storeMessageIds(lobbyId, "mode", embedMsgId, usernameMsgId, env);
+      console.log(`[${env}] Per-mode Discord notified for ${format} (${lobbyId})`);
+    } catch (err) {
+      console.error(`[${env}] Per-mode Discord webhook error: ${err.message}`);
+    }
   }
 }
 
@@ -1363,6 +1406,14 @@ exports.createGameMode = onRequest({ cors: true, memory: "1GiB", timeoutSeconds:
   const existingSnap = await admin.database().ref(scopePath(env, `gameModes/${id}`)).once("value");
   const existing = existingSnap.exists() ? existingSnap.val() : null;
 
+  // Per-mode Discord webhook (optional). When set, the mode's lobbies
+  // notify this URL in addition to the master /general webhook.
+  let discordWebhookUrl = (body.discordWebhookUrl || "").trim();
+  if (discordWebhookUrl && !discordWebhookUrl.startsWith("https://")) {
+    res.status(400).json({ error: "discordWebhookUrl must start with https://" });
+    return;
+  }
+
   const mode = {
     id,
     displayName: body.displayName,
@@ -1371,6 +1422,7 @@ exports.createGameMode = onRequest({ cors: true, memory: "1GiB", timeoutSeconds:
     isBestOf3Default: !!body.isBestOf3Default,
     legalitySource: body.legalitySource,
     postProcessing: body.postProcessing || null,
+    discordWebhookUrl: discordWebhookUrl || null,
     createdAt: existing?.createdAt || now,
     createdBy: existing?.createdBy || (body.createdBy || "unknown"),
     updatedAt: now,

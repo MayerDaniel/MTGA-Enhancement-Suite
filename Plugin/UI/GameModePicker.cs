@@ -34,8 +34,23 @@ namespace MTGAEnhancementSuite.UI
             RefreshList("");
             _root.SetActive(true);
 
-            // Focus search after a frame
-            _search.Select();
+            // Focus + activate the input on the next frame; ActivateInputField
+            // is what actually opens the text input (Select alone doesn't).
+            // We need a frame delay so the canvas is fully active first.
+            var runner = MTGAEnhancementSuite.Firebase.FirebaseClient.Instance;
+            if (runner != null) runner.StartCoroutine(FocusSearchNextFrame());
+        }
+
+        private static System.Collections.IEnumerator FocusSearchNextFrame()
+        {
+            yield return null; // wait one frame
+            if (_search != null && _search.gameObject.activeInHierarchy)
+            {
+                if (UnityEngine.EventSystems.EventSystem.current != null)
+                    UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(_search.gameObject);
+                _search.Select();
+                _search.ActivateInputField();
+            }
         }
 
         public static void Close()
