@@ -743,9 +743,25 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
     pauper: secrets.pauper,
   };
 
+  // Per-channel format display names match the original webhook send logic
+  function formatDisplayFor(channel) {
+    if (format === "none") return "No Format";
+    if (channel === "planar") return "Planar Standard";
+    if (channel === "pauper") {
+      // pauper webhook displays "pauper" as "Vintage Pauper"
+      return PAUPER_DISPLAY_NAMES[format] || FORMAT_REGISTRY[format]?.displayName || format;
+    }
+    // general channel: use registry display name
+    return FORMAT_REGISTRY[format]?.displayName ||
+           PAUPER_DISPLAY_NAMES[format] ||
+           format.charAt(0).toUpperCase() + format.slice(1);
+  }
+
   for (const [channel, msgIds] of Object.entries(messages)) {
     const webhookUrl = webhookMap[channel];
     if (!webhookUrl) continue;
+
+    const formatDisplay = formatDisplayFor(channel);
 
     try {
       // Edit the embed message to show closed
@@ -754,7 +770,7 @@ async function expireDiscordMessages(lobbyId, lobby, secrets) {
           embeds: [{
             title: "🚫 Lobby Closed",
             color: 0x666666,
-            description: `~~${host}'s ${format} lobby~~ — This lobby is no longer available.\n\n[Learn more about MTGA+](https://github.com/MayerDaniel/MTGA-Enhancement-Suite)`,
+            description: `~~${host}'s ${formatDisplay} lobby~~ — This lobby is no longer available.\n\n[Learn more about MTGA+](https://github.com/MayerDaniel/MTGA-Enhancement-Suite)`,
             timestamp: new Date().toISOString(),
           }],
         });
