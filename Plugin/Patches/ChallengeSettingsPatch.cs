@@ -256,6 +256,10 @@ namespace MTGAEnhancementSuite.Patches
                         ChallengeFormatState.SelectedFormat);
                     Plugin.Log.LogInfo($"Pushed format change to Firebase: {ChallengeFormatState.SelectedFormat}");
                     PerPlayerLog.Info($"Pushed format change to Firebase: {ChallengeFormatState.SelectedFormat}");
+
+                    // Apply the gameMode's MatchType (e.g. switch DirectGame to
+                    // DirectGameAlchemy for rebalanced formats) onto the active challenge.
+                    PushMatchTypeForCurrentMode();
                 }
 
                 // Show/hide buttons based on format selection
@@ -605,6 +609,72 @@ namespace MTGAEnhancementSuite.Patches
             catch (Exception ex)
             {
                 Plugin.Log.LogWarning($"RegisterLobbyIfNeeded failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Pushes the active game mode's MatchType (e.g. DirectGame, DirectGameAlchemy)
+        /// onto the active challenge via PVPChallengeController.SetGameSettings(...).
+        /// This is what makes "60 card rebalanced" vs "60 card" actually take effect.
+        /// </summary>
+        private static void PushMatchTypeForCurrentMode()
+        {
+            try
+            {
+                var gameMode = ChallengeFormatState.GetGameMode(ChallengeFormatState.SelectedFormat);
+                if (gameMode == null || string.IsNullOrEmpty(gameMode.MatchType)) return;
+                if (ChallengeFormatState.ActiveChallengeId == Guid.Empty) return;
+
+                var controller = ChallengeCreatePatch.CachedController;
+                var controllerType = ChallengeCreatePatch.CachedControllerType;
+                if (controller == null || controllerType == null)
+                {
+                    PerPlayerLog.Warning("PushMatchType: no cached PVPChallengeController");
+                    return;
+                }
+
+                var setGameSettings = AccessTools.Method(controllerType, "SetGameSettings");
+                if (setGameSettings == null)
+                {
+                    PerPlayerLog.Warning("PushMatchType: SetGameSettings not found");
+                    return;
+                }
+
+                // Resolve ChallengeMatchTypes enum value from the string name
+                var paramTypes = setGameSettings.GetParameters();
+                var matchTypeEnum = paramTypes.Length >= 2 ? paramTypes[1].ParameterType : null;
+                var whoPlaysFirstEnum = paramTypes.Length >= 3 ? paramTypes[2].ParameterType : null;
+                if (matchTypeEnum == null || !matchTypeEnum.IsEnum)
+                {
+                    PerPlayerLog.Warning("PushMatchType: SetGameSettings signature unexpected");
+                    return;
+                }
+
+                object matchTypeValue;
+                try { matchTypeValue = Enum.Parse(matchTypeEnum, gameMode.MatchType); }
+                catch
+                {
+                    PerPlayerLog.Warning($"PushMatchType: unknown MatchType '{gameMode.MatchType}', defaulting to DirectGame");
+                    matchTypeValue = Enum.Parse(matchTypeEnum, "DirectGame");
+                }
+
+                // Default WhoPlaysFirst (Coinflip = 0 typically) — preserve existing if possible.
+                object whoPlaysFirstValue = whoPlaysFirstEnum != null
+                    ? Enum.GetValues(whoPlaysFirstEnum).GetValue(0)
+                    : null;
+
+                setGameSettings.Invoke(controller, new[]
+                {
+                    (object)ChallengeFormatState.ActiveChallengeId,
+                    matchTypeValue,
+                    whoPlaysFirstValue,
+                    (object)ChallengeFormatState.IsBestOf3,
+                });
+                PerPlayerLog.Info($"PushMatchType: applied {gameMode.MatchType} to challenge {ChallengeFormatState.ActiveChallengeId}");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"PushMatchType failed: {ex.Message}");
             }
         }
 

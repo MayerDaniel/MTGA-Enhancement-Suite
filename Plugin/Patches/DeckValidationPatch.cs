@@ -145,7 +145,9 @@ namespace MTGAEnhancementSuite.Patches
                 {
                     ["grpId"] = card.ArenaId,
                     ["name"] = card.Name,
-                    ["quantity"] = card.Quantity
+                    ["quantity"] = card.Quantity,
+                    ["rarityValue"] = card.RarityValue,
+                    ["isSideboard"] = card.IsSideboard,
                 };
                 decklistJson.Add(cardObj);
             }
@@ -153,11 +155,12 @@ namespace MTGAEnhancementSuite.Patches
             var payload = new JObject
             {
                 ["challengeId"] = ChallengeFormatState.ActiveChallengeId.ToString(),
-                ["format"] = format,
-                ["decklist"] = decklistJson
+                ["gameModeId"] = format,
+                ["format"] = format, // legacy alias for older Cloud Function builds
+                ["decklist"] = decklistJson,
             };
 
-            Plugin.Log.LogInfo($"Sending {deckCards.Count} cards to validateDeck for format {format}");
+            Plugin.Log.LogInfo($"Sending {deckCards.Count} cards to validateDeck for mode {format}");
 
             bool requestDone = false;
             JObject responseData = null;
@@ -218,32 +221,61 @@ namespace MTGAEnhancementSuite.Patches
             }
             else
             {
-                var illegalArray = responseData["illegalCards"] as JArray;
-                string formatName = responseData["format"]?.ToString() ?? format;
-                formatName = formatName.Substring(0, 1).ToUpper() + formatName.Substring(1);
+                // Resolve display name: prefer the GameMode entry's friendly name.
+                var modeEntry = ChallengeFormatState.GetGameMode(format);
+                string formatName = modeEntry?.DisplayName
+                    ?? responseData["gameModeId"]?.ToString()
+                    ?? responseData["format"]?.ToString()
+                    ?? format;
 
-                string message = $"Deck not legal in {formatName}.\n\nIllegal cards:\n";
-                int shown = 0;
-                int total = illegalArray?.Count ?? 0;
+                // Build a single message body from all violations
+                var violations = responseData["violations"] as JArray;
+                var legacyIllegal = responseData["illegalCards"] as JArray;
+                string message = $"Deck not legal in {formatName}.\n";
 
-                if (illegalArray != null)
+                if (violations != null && violations.Count > 0)
                 {
-                    foreach (var card in illegalArray)
+                    foreach (var v in violations)
+                    {
+                        var msg = v["message"]?.ToString() ?? "Violation";
+                        message += $"\n• {msg}";
+                        var cards = v["cards"] as JArray;
+                        if (cards != null && cards.Count > 0)
+                        {
+                            int shown = 0;
+                            foreach (var c in cards)
+                            {
+                                var name = c["name"]?.ToString() ?? $"ID: {c["grpId"]}";
+                                var qty = c["quantity"]?.Value<int>() ?? 1;
+                                message += $"\n   - {name} x{qty}";
+                                shown++;
+                                if (shown >= 10 && cards.Count > 12)
+                                {
+                                    message += $"\n   ... and {cards.Count - shown} more";
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (legacyIllegal != null)
+                {
+                    // Legacy response shape (older Cloud Function build)
+                    int shown = 0;
+                    int total = legacyIllegal.Count;
+                    message += "\nIllegal cards:";
+                    foreach (var card in legacyIllegal)
                     {
                         var name = card["name"]?.ToString() ?? $"ID: {card["grpId"]}";
                         var qty = card["quantity"]?.Value<int>() ?? 1;
-                        message += $"  - {name} x{qty}\n";
+                        message += $"\n  - {name} x{qty}";
                         shown++;
-                        if (shown >= 15)
-                        {
-                            message += $"  ... and {total - shown} more\n";
-                            break;
-                        }
+                        if (shown >= 15) { message += $"\n  ... and {total - shown} more"; break; }
                     }
                 }
 
                 Plugin.Log.LogWarning(message);
-                Toast.Error($"Deck not legal in {formatName} ({total} illegal cards)");
+                Toast.Error($"Deck not legal in {formatName}");
                 ShowErrorDialog("Deck Not Legal", message);
             }
         }
@@ -320,6 +352,64 @@ namespace MTGAEnhancementSuite.Patches
                 Plugin.Log.LogWarning($"Could not get CardTitleProvider: {ex.Message}");
             }
 
+            // Get card data provider for rarity lookup
+            object cardDataProvider = null;
+            MethodInfo getCardRecordByIdMethod = null;
+            FieldInfo rarityField = null;
+            try
+            {
+                Type cardDbType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    foreach (var t in asm.GetTypes())
+                    {
+                        if (t.Name == "CardDatabase" && !t.IsAbstract && !t.IsInterface)
+                        { cardDbType = t; break; }
+                    }
+                    if (cardDbType != null) break;
+                }
+                if (cardDbType != null)
+                {
+                    var cardDb2 = pantryType.GetMethod("Get").MakeGenericMethod(cardDbType).Invoke(null, null);
+                    // CardDatabase exposes a CardDataProvider (or similar) via a property or field;
+                    // GetCardRecordById exists on AltPrintingLayeredCardDataProvider and others.
+                    // We can call GetCardRecordById on the database itself if it implements it,
+                    // or via the Provider field.
+                    getCardRecordByIdMethod = AccessTools.Method(cardDbType, "GetCardRecordById",
+                        new[] { typeof(uint), typeof(string) });
+                    if (getCardRecordByIdMethod != null) cardDataProvider = cardDb2;
+                    else
+                    {
+                        // Try to find a Provider field
+                        foreach (var f in cardDbType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                        {
+                            if (f.FieldType.Name.Contains("CardDataProvider") || f.Name.IndexOf("Provider", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                var prov = f.GetValue(cardDb2);
+                                if (prov == null) continue;
+                                var m = AccessTools.Method(prov.GetType(), "GetCardRecordById",
+                                    new[] { typeof(uint), typeof(string) });
+                                if (m != null)
+                                {
+                                    cardDataProvider = prov;
+                                    getCardRecordByIdMethod = m;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (getCardRecordByIdMethod != null)
+                    {
+                        var recordType = getCardRecordByIdMethod.ReturnType;
+                        rarityField = AccessTools.Field(recordType, "Rarity");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"Could not get CardDataProvider for rarity: {ex.Message}");
+            }
+
             var result = new List<DeckCard>();
 
             foreach (System.Collections.DictionaryEntry pile in piles)
@@ -327,12 +417,32 @@ namespace MTGAEnhancementSuite.Patches
                 var cards = pile.Value as IList;
                 if (cards == null) continue;
 
+                // Detect sideboard pile by key name (string or enum.ToString())
+                var pileKey = pile.Key?.ToString() ?? "";
+                bool isSideboard = pileKey.IndexOf("sideboard", StringComparison.OrdinalIgnoreCase) >= 0;
+
                 foreach (var card in cards)
                 {
                     var idField = AccessTools.Field(card.GetType(), "Id");
                     var qtyField = AccessTools.Field(card.GetType(), "Quantity");
                     var grpId = (uint)idField.GetValue(card);
                     var qty = (uint)qtyField.GetValue(card);
+
+                    // Rarity lookup via CardDataProvider; defaults to 0 (Unknown) if unavailable.
+                    int rarityValue = 0;
+                    if (cardDataProvider != null && getCardRecordByIdMethod != null && rarityField != null)
+                    {
+                        try
+                        {
+                            var record = getCardRecordByIdMethod.Invoke(cardDataProvider, new object[] { grpId, null });
+                            if (record != null)
+                            {
+                                var rarityEnum = rarityField.GetValue(record);
+                                if (rarityEnum != null) rarityValue = (int)rarityEnum;
+                            }
+                        }
+                        catch { }
+                    }
 
                     string cardName = $"Card#{grpId}";
 
@@ -373,7 +483,9 @@ namespace MTGAEnhancementSuite.Patches
                     {
                         ArenaId = grpId,
                         Name = cardName,
-                        Quantity = qty
+                        Quantity = qty,
+                        RarityValue = rarityValue,
+                        IsSideboard = isSideboard,
                     });
                 }
             }
@@ -415,6 +527,8 @@ namespace MTGAEnhancementSuite.Patches
             public uint ArenaId;
             public string Name;
             public uint Quantity;
+            public int RarityValue;   // 1=Basic Land, 2=Common, 3=Uncommon, 4=Rare, 5=Mythic
+            public bool IsSideboard;
         }
     }
 }

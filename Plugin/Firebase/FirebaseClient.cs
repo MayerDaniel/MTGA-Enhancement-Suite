@@ -452,45 +452,62 @@ namespace MTGAEnhancementSuite.Firebase
         /// Generic authenticated GET request to the database.
         /// </summary>
         /// <summary>
-        /// Fetches the format list from /formatList in Firebase and populates ChallengeFormatState.
+        /// Fetches the game mode list from Firebase. Tries /gameModes first
+        /// (the new schema), falls back to /formatList (legacy).
         /// </summary>
         public void FetchFormatList()
         {
-            DatabaseGet("formatList", data =>
+            DatabaseGet("gameModes", data =>
             {
-                if (data == null || data.Type == JTokenType.Null)
+                if (data != null && data.Type == JTokenType.Object && ((JObject)data).Count > 0)
                 {
-                    Plugin.Log.LogWarning("No format list found in Firebase — using defaults");
-                    // Fall back to just Pauper
-                    ChallengeFormatState.SetFormats(
-                        new System.Collections.Generic.List<string> { "pauper" },
-                        new System.Collections.Generic.List<string> { "Pauper" }
-                    );
+                    var modes = new System.Collections.Generic.List<State.GameMode>();
+                    foreach (var prop in ((JObject)data).Properties())
+                    {
+                        var v = prop.Value;
+                        modes.Add(new State.GameMode
+                        {
+                            Id = prop.Name,
+                            DisplayName = v["displayName"]?.ToString() ?? prop.Name,
+                            Description = v["description"]?.ToString() ?? "",
+                            MatchType = v["matchType"]?.ToString() ?? "DirectGame",
+                            IsBestOf3Default = v["isBestOf3Default"]?.Value<bool>() ?? true,
+                        });
+                    }
+                    Plugin.Log.LogInfo($"Loaded {modes.Count} game modes from /gameModes");
+                    ChallengeFormatState.SetGameModes(modes);
                     return;
                 }
 
-                var keys = new System.Collections.Generic.List<string>();
-                var names = new System.Collections.Generic.List<string>();
+                // Legacy fallback to /formatList
+                Plugin.Log.LogInfo("/gameModes empty, falling back to /formatList");
+                DatabaseGet("formatList", legacyData =>
+                {
+                    if (legacyData == null || legacyData.Type == JTokenType.Null)
+                    {
+                        Plugin.Log.LogWarning("No format list found in Firebase — using defaults");
+                        ChallengeFormatState.SetFormats(
+                            new System.Collections.Generic.List<string> { "pauper" },
+                            new System.Collections.Generic.List<string> { "Pauper" }
+                        );
+                        return;
+                    }
 
-                foreach (var prop in ((JObject)data).Properties())
-                {
-                    keys.Add(prop.Name);
-                    var displayName = prop.Value["displayName"]?.ToString() ?? prop.Name;
-                    names.Add(displayName);
-                }
-
-                if (keys.Count > 0)
-                {
-                    ChallengeFormatState.SetFormats(keys, names);
-                }
-                else
-                {
-                    Plugin.Log.LogWarning("Format list was empty — using defaults");
-                    ChallengeFormatState.SetFormats(
-                        new System.Collections.Generic.List<string> { "pauper" },
-                        new System.Collections.Generic.List<string> { "Pauper" }
-                    );
-                }
+                    var keys = new System.Collections.Generic.List<string>();
+                    var names = new System.Collections.Generic.List<string>();
+                    foreach (var prop in ((JObject)legacyData).Properties())
+                    {
+                        keys.Add(prop.Name);
+                        names.Add(prop.Value["displayName"]?.ToString() ?? prop.Name);
+                    }
+                    if (keys.Count > 0)
+                        ChallengeFormatState.SetFormats(keys, names);
+                    else
+                        ChallengeFormatState.SetFormats(
+                            new System.Collections.Generic.List<string> { "pauper" },
+                            new System.Collections.Generic.List<string> { "Pauper" }
+                        );
+                });
             });
         }
 

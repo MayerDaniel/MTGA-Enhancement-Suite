@@ -1,8 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace MTGAEnhancementSuite.State
 {
+    /// <summary>
+    /// Lightweight client-side representation of a game mode definition.
+    /// Mirrors the Firebase /gameModes/{id} schema — minus legalitySource
+    /// (only needed server-side) and minus legalityCache (also server-side).
+    /// </summary>
+    internal class GameMode
+    {
+        public string Id;
+        public string DisplayName;
+        public string Description;
+        public string MatchType = "DirectGame";
+        public bool IsBestOf3Default = true;
+        // postProcessing is opaque to the client — server enforces it.
+    }
+
     internal static class ChallengeFormatState
     {
         public static string SelectedFormat = "none";
@@ -43,26 +59,53 @@ namespace MTGAEnhancementSuite.State
         /// <summary>Whether the format list has been fetched from Firebase.</summary>
         public static bool FormatsLoaded = false;
 
-        // Dynamic format lists — populated from Firebase /formatList on startup.
-        // "No Format" / "none" is always prepended.
-        private static List<string> _formatOptions = new List<string> { "No Format" };
-        private static List<string> _formatKeys = new List<string> { "none" };
+        // Game mode list — populated from Firebase /gameModes (or legacy /formatList).
+        // "none" / "No Format" is always prepended as a sentinel.
+        private static List<GameMode> _gameModes = new List<GameMode>
+        {
+            new GameMode { Id = "none", DisplayName = "No Format", MatchType = "DirectGame", IsBestOf3Default = false },
+        };
 
-        public static string[] FormatOptions => _formatOptions.ToArray();
-        public static string[] FormatKeys => _formatKeys.ToArray();
+        public static IReadOnlyList<GameMode> GameModes => _gameModes;
+        public static GameMode GetGameMode(string id) =>
+            _gameModes.FirstOrDefault(m => m.Id == id);
+
+        // Backward-compat string arrays for older code paths (filter UI etc.)
+        public static string[] FormatOptions => _gameModes.Select(m => m.DisplayName).ToArray();
+        public static string[] FormatKeys => _gameModes.Select(m => m.Id).ToArray();
 
         /// <summary>
-        /// Replaces the format lists with data fetched from Firebase.
-        /// Called once after auth succeeds.
+        /// Replaces the game mode list. Called once after auth succeeds.
+        /// </summary>
+        public static void SetGameModes(List<GameMode> modes)
+        {
+            _gameModes = new List<GameMode>
+            {
+                new GameMode { Id = "none", DisplayName = "No Format", MatchType = "DirectGame", IsBestOf3Default = false },
+            };
+            if (modes != null) _gameModes.AddRange(modes);
+            FormatsLoaded = true;
+            Plugin.Log.LogInfo($"Game modes loaded ({_gameModes.Count}): {string.Join(", ", _gameModes.Select(m => m.Id))}");
+        }
+
+        /// <summary>
+        /// Legacy entry point used by FetchFormatList — converts simple
+        /// (key, displayName) pairs into stub GameMode records.
         /// </summary>
         public static void SetFormats(List<string> keys, List<string> displayNames)
         {
-            _formatKeys = new List<string> { "none" };
-            _formatOptions = new List<string> { "No Format" };
-            _formatKeys.AddRange(keys);
-            _formatOptions.AddRange(displayNames);
-            FormatsLoaded = true;
-            Plugin.Log.LogInfo($"Format list loaded: {string.Join(", ", _formatKeys)}");
+            var modes = new List<GameMode>();
+            for (int i = 0; i < keys.Count; i++)
+            {
+                modes.Add(new GameMode
+                {
+                    Id = keys[i],
+                    DisplayName = i < displayNames.Count ? displayNames[i] : keys[i],
+                    MatchType = "DirectGame",
+                    IsBestOf3Default = true,
+                });
+            }
+            SetGameModes(modes);
         }
 
         public static void SetPendingJoin(string challengeId, string format)
