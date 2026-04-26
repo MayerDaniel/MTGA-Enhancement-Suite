@@ -25,8 +25,12 @@ namespace MTGAEnhancementSuite.UI
         private const string GameObjectName = "MTGAES_FormatComboBox";
         private const string ListCanvasName = "MTGAES_FormatComboBoxList";
 
+        private const int MaxVisibleRows = 5;
+        private const float RowHeight = 36f;
+
         private static GameObject _row;
         private static RectTransform _rowRect;
+        private static Canvas _rowCanvas; // for camera lookup when computing screen position
         private static TMP_InputField _inputField;
         private static GameObject _caret;
 
@@ -66,13 +70,14 @@ namespace MTGAEnhancementSuite.UI
             _rowRect.anchoredPosition = sourceRect.anchoredPosition;
             _rowRect.sizeDelta = sourceRect.sizeDelta;
 
-            var rowCanvas = _row.AddComponent<Canvas>();
-            rowCanvas.overrideSorting = true;
-            rowCanvas.sortingOrder = 60;
+            _rowCanvas = _row.AddComponent<Canvas>();
+            _rowCanvas.overrideSorting = true;
+            _rowCanvas.sortingOrder = 60;
             _row.AddComponent<GraphicRaycaster>();
 
             BuildRow();
             EnsureListCanvas();
+            SetCaretOpen(false); // initial: closed → caret points right
         }
 
         public static void SyncDisplay(int index)
@@ -282,34 +287,56 @@ namespace MTGAEnhancementSuite.UI
             {
                 _listCanvasGO.SetActive(true);
             }
-            UpdateListPosition();
             RebuildList(_inputField?.text ?? "");
+            UpdateListPosition();
+            SetCaretOpen(true);
         }
 
         private static void HideList()
         {
             if (_listCanvasGO != null) _listCanvasGO.SetActive(false);
+            SetCaretOpen(false);
         }
 
         /// <summary>Repositions the list panel to sit just below the row, in screen-space.</summary>
         internal static void UpdateListPosition()
         {
             if (_rowRect == null || _listPanelRect == null) return;
-            if (!_listCanvasGO.activeSelf) return;
+            if (_listCanvasGO == null || !_listCanvasGO.activeSelf) return;
 
-            // Get the row's bottom-left and bottom-right corners in world space
+            // The source row's parent canvas may be ScreenSpaceCamera (MTGA's
+            // challenge UI typically is). World corners on a camera-space
+            // canvas are NOT pixel coords — we must convert using the same
+            // camera. For ScreenSpaceOverlay sources, camera is null and the
+            // conversion is a passthrough.
+            var sourceCamera = (_rowCanvas != null && _rowCanvas.renderMode != RenderMode.ScreenSpaceOverlay)
+                ? _rowCanvas.worldCamera
+                : null;
+
             var corners = new Vector3[4];
             _rowRect.GetWorldCorners(corners);
-            // corners: 0=BL, 1=TL, 2=TR, 3=BR
-            Vector3 bl = corners[0];
-            Vector3 br = corners[3];
+            // 0=BL, 1=TL, 2=TR, 3=BR
+            Vector2 blScreen = RectTransformUtility.WorldToScreenPoint(sourceCamera, corners[0]);
+            Vector2 brScreen = RectTransformUtility.WorldToScreenPoint(sourceCamera, corners[3]);
 
-            float width = Vector3.Distance(bl, br);
+            float width = Mathf.Abs(brScreen.x - blScreen.x);
             if (width <= 1) return;
 
-            _listPanelRect.sizeDelta = new Vector2(width, 280);
-            // ScreenSpaceOverlay canvases use pixel coords directly.
-            _listPanelRect.position = new Vector3(bl.x, bl.y, 0);
+            // Cap height at MaxVisibleRows
+            int actualRows = _listContent != null ? _listContent.childCount : 0;
+            float rowsHeight = Mathf.Max(1, Mathf.Min(actualRows, MaxVisibleRows)) * RowHeight;
+
+            _listPanelRect.sizeDelta = new Vector2(width, rowsHeight);
+            // ScreenSpaceOverlay panel uses pixel coords; pivot is top-left.
+            _listPanelRect.position = new Vector3(blScreen.x, blScreen.y, 0);
+        }
+
+        private static void SetCaretOpen(bool open)
+        {
+            if (_caret == null) return;
+            // Closed = pointing right (>) = 90° CCW rotation
+            // Open   = pointing down (▾) = 0° (default triangle orientation)
+            _caret.transform.localRotation = Quaternion.Euler(0, 0, open ? 0 : 90);
         }
 
         private static void RebuildList(string filter)
