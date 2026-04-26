@@ -243,8 +243,11 @@ namespace MTGAEnhancementSuite.UI
 
             var viewport = NewChild(panel.transform, "Viewport");
             Stretch(viewport);
-            viewport.AddComponent<Image>().color = new Color(0, 0, 0, 0);
-            viewport.AddComponent<Mask>().showMaskGraphic = false;
+            // Image (transparent) is needed for ScrollRect drag raycasts.
+            // RectMask2D handles clipping by rect bounds — unlike Mask, it
+            // doesn't depend on the Image's alpha for masking shape.
+            viewport.AddComponent<Image>().color = new Color(0, 0, 0, 0.001f);
+            viewport.AddComponent<RectMask2D>();
             scroll.viewport = viewport.GetComponent<RectTransform>();
 
             var content = NewChild(viewport.transform, "Content");
