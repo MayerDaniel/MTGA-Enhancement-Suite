@@ -215,12 +215,39 @@ namespace MTGAEnhancementSuite.Patches
             foreach (var d in _mutatedDecks)
                 if (d != null) d.NetDeckFolderId = null;
             _mutatedDecks.Clear();
+
+            // Force our user-folder views visible regardless of deck count.
+            // MTGA's SetDecks deactivates any DeckFolderView whose deck list
+            // came up empty (this is what powers the "Starter Decks folder
+            // hides when no starter decks match the format filter" behavior).
+            // For user folders we want the opposite: a freshly-created
+            // empty folder, or a folder that's only emptied by the current
+            // format filter, should still show its header so the user can
+            // see + interact with it. Otherwise creating a new folder looks
+            // like it didn't work — the data lands fine but MTGA hides it
+            // before the user can see it.
+            foreach (var view in _injectedViews)
+            {
+                if (view == null) continue;
+                if (!view.gameObject.activeSelf)
+                    view.gameObject.SetActive(true);
+            }
         }
 
         // Attaches the right-click context menu handler to the Toggle's
-        // GameObject (where UGUI raycasts actually land) AND to every
-        // raycast-target Image in the folder header, since MTGA's header
-        // hierarchy is not entirely flat. Plus the root, as a safety net.
+        // GameObject (where UGUI raycasts actually land for the header)
+        // plus the root, as a bubble-up safety net.
+        //
+        // We deliberately do NOT attach to every raycast-target Image under
+        // the header. UGUI's ExecuteEvents.ExecuteHierarchy stops walking
+        // up the parent chain at the first GameObject with an
+        // IPointerClickHandler. The chevron `>` is a child raycast Image:
+        // if we put a FolderContextMenuHandler on it, left-clicks land on
+        // the chevron, hit our handler first (which only acts on right-
+        // clicks), and never bubble to the Toggle — so the chevron stops
+        // expanding/collapsing the folder. Skipping the per-image attach
+        // lets chevron clicks travel up to the Toggle's own
+        // IPointerClickHandler.
         private static FieldInfo _folderToggleField;
         private static void AttachContextHandler(DeckFolderView view, Guid folderId)
         {
@@ -239,15 +266,14 @@ namespace MTGAEnhancementSuite.Patches
 
             // 2) The Toggle's GameObject — the most reliable click target,
             //    found via reflection on the private _folderToggle field.
+            //    Both the Toggle's own OnPointerClick (flips state on left-
+            //    click) and our FolderContextMenuHandler (shows context
+            //    menu on right-click) coexist on this GameObject; UGUI
+            //    invokes both for any pointer click event on the GO.
             if (_folderToggleField == null)
                 _folderToggleField = AccessTools.Field(typeof(DeckFolderView), "_folderToggle");
             var toggle = _folderToggleField?.GetValue(view) as Component;
             if (toggle != null) Add(toggle.gameObject);
-
-            // 3) Every Image with raycastTarget=true in the header area —
-            //    catches custom raycast surfaces MTGA might add.
-            foreach (var img in view.GetComponentsInChildren<UnityEngine.UI.Image>(true))
-                if (img.raycastTarget) Add(img.gameObject);
         }
 
         /// <summary>

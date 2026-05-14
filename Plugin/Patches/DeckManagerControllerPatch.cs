@@ -31,10 +31,15 @@ namespace MTGAEnhancementSuite.Patches
     [HarmonyPatch(typeof(DeckManagerController), "Awake")]
     internal static class DeckManagerControllerPatch
     {
-        private const string SelectBtnName = "MTGAES_SelectButton";
-        private const string CancelBtnName = "MTGAES_CancelButton";
-        private const string DeleteBtnName = "MTGAES_DeleteButton";
-        private const string MoveBtnName   = "MTGAES_MoveButton";
+        private const string SelectBtnName     = "MTGAES_SelectButton";
+        private const string CancelBtnName     = "MTGAES_CancelButton";
+        private const string DeleteBtnName     = "MTGAES_DeleteButton";
+        private const string MoveBtnName       = "MTGAES_MoveButton";
+        // Normal-mode equivalents: one-deck move (visible when a deck is
+        // focused) and a standing "create a new folder" button (visible
+        // any time the deck manager is open in normal mode).
+        private const string MoveSingleBtnName = "MTGAES_MoveSingleButton";
+        private const string NewFolderBtnName  = "MTGAES_NewFolderButton";
 
         // Reflection caches
         private static FieldInfo _favoriteBtnField;
@@ -49,6 +54,9 @@ namespace MTGAEnhancementSuite.Patches
         private static FieldInfo _selectorInstanceField;
         private static FieldInfo _deckViewInfosField;
         private static FieldInfo _deckBucketDropdownField;
+        // The currently-focused deck (the one MTGA's per-deck buttons act on).
+        // Used to drive the single-deck Move button's visibility + click target.
+        private static FieldInfo _selectedDeckField;
 
         // Per-controller bookkeeping
         private static DeckManagerController _controller;
@@ -56,6 +64,8 @@ namespace MTGAEnhancementSuite.Patches
         private static GameObject _cancelBtnGO;
         private static GameObject _deleteBtnGO;
         private static GameObject _moveBtnGO;
+        private static GameObject _moveSingleBtnGO;
+        private static GameObject _newFolderBtnGO;
 
         [HarmonyPostfix]
         private static void Postfix(DeckManagerController __instance)
@@ -107,6 +117,38 @@ namespace MTGAEnhancementSuite.Patches
                 }
                 ButtonTooltip.Attach(_moveBtnGO, "Move to folder");
 
+                // Normal-mode: "Move this deck to folder" — visible only when
+                // a deck is currently focused (mirrors how MTGA enables/
+                // disables Edit, Delete, Clone, etc.). Visibility is kept in
+                // sync by the Harmony postfix on UpdateSelectedDeckView below.
+                if (parent.Find(MoveSingleBtnName) == null)
+                {
+                    _moveSingleBtnGO = BuildButton(sourceGO, parent, MoveSingleBtnName,
+                        sourceGO.transform.GetSiblingIndex() + 5,
+                        PaintFolderIcon, OnMoveSingleClicked);
+                    _moveSingleBtnGO.SetActive(false);
+                }
+                else
+                {
+                    _moveSingleBtnGO = parent.Find(MoveSingleBtnName).gameObject;
+                }
+                ButtonTooltip.Attach(_moveSingleBtnGO, "Move this deck to folder");
+
+                // Normal-mode: standing "+ New folder" — always visible in
+                // normal mode so users can create folders without first
+                // entering multi-select.
+                if (parent.Find(NewFolderBtnName) == null)
+                {
+                    _newFolderBtnGO = BuildButton(sourceGO, parent, NewFolderBtnName,
+                        sourceGO.transform.GetSiblingIndex() + 6,
+                        PaintNewFolderIcon, OnNewFolderClicked);
+                }
+                else
+                {
+                    _newFolderBtnGO = parent.Find(NewFolderBtnName).gameObject;
+                }
+                ButtonTooltip.Attach(_newFolderBtnGO, "Create a new folder");
+
                 // Collect MTGA's native per-deck buttons so we can hide/show
                 // them when multi-select toggles. Skip deckOrder/deckBucket
                 // (sort + format filter) — those stay visible always.
@@ -153,6 +195,7 @@ namespace MTGAEnhancementSuite.Patches
             _selectorInstanceField = AccessTools.Field(t, "_deckSelectorInstance");
             _deckViewInfosField    = AccessTools.Field(t, "_deckViewInfos");
             _deckBucketDropdownField = AccessTools.Field(t, "_deckBucketDropdown");
+            _selectedDeckField     = AccessTools.Field(t, "_selectedDeck");
         }
 
         private static void AddNative(FieldInfo field, object instance)
@@ -178,8 +221,45 @@ namespace MTGAEnhancementSuite.Patches
             if (_deleteBtnGO != null) _deleteBtnGO.SetActive(multi);
             if (_moveBtnGO   != null) _moveBtnGO.SetActive(multi);
 
+            // Standing "+ New folder" lives in normal mode, hides in multi-
+            // select (where Move-to-folder covers the same ground).
+            if (_newFolderBtnGO != null) _newFolderBtnGO.SetActive(!multi);
+
+            // Single-deck Move button: only in normal mode AND only when a
+            // deck is currently focused. The UpdateSelectedDeckView postfix
+            // keeps this in sync as the user clicks around; this call here
+            // covers the mode-toggle case (e.g. exiting multi-select while
+            // a deck is focused).
+            if (_moveSingleBtnGO != null)
+                _moveSingleBtnGO.SetActive(!multi && IsDeckCurrentlyFocused());
+
             // Refresh Delete-N label whenever the selection set changes.
             if (multi && _deleteBtnGO != null) UpdateDeleteCountLabel();
+        }
+
+        /// <summary>
+        /// Reads <see cref="DeckManagerController._selectedDeck"/> via the
+        /// cached <see cref="_selectedDeckField"/>. Null deck → no focus.
+        /// </summary>
+        private static bool IsDeckCurrentlyFocused()
+        {
+            if (_controller == null || _selectedDeckField == null) return false;
+            try { return _selectedDeckField.GetValue(_controller) != null; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Called by the Harmony postfix on
+        /// <c>DeckManagerController.UpdateSelectedDeckView</c> — the same
+        /// hook MTGA uses to flip <c>Interactable</c> on its own per-deck
+        /// buttons. <paramref name="hasFocus"/> reflects whether the user
+        /// has a deck selected; we hide the single-deck Move button when
+        /// no deck is focused so it never appears to do nothing.
+        /// </summary>
+        internal static void OnSelectionFocusChanged(bool hasFocus)
+        {
+            if (DeckMultiSelectState.IsActive) return;
+            if (_moveSingleBtnGO != null) _moveSingleBtnGO.SetActive(hasFocus);
         }
 
         private static void UpdateDeleteCountLabel()
@@ -217,6 +297,47 @@ namespace MTGAEnhancementSuite.Patches
             if (n <= 0) return;
             var ids = new List<Guid>(DeckMultiSelectState.SelectedIds);
             MoveToFolderModal.Show(ids);
+        }
+
+        // Normal-mode click: move the currently-focused deck. We re-read the
+        // focused deck at click time rather than caching it — MTGA's
+        // <c>_selectedDeck</c> is the source of truth, and depending on a
+        // cached snapshot has burned us before (post-refresh focus changes).
+        private static void OnMoveSingleClicked()
+        {
+            if (_controller == null || _selectedDeckField == null) return;
+            var deck = _selectedDeckField.GetValue(_controller);
+            if (deck == null) return;
+
+            // Client_Deck.Id — could be exposed as a field OR a property
+            // depending on MTGA's current patch. Try both.
+            var type = deck.GetType();
+            Guid id = Guid.Empty;
+            try
+            {
+                var idField = AccessTools.Field(type, "Id");
+                if (idField != null) id = (Guid)idField.GetValue(deck);
+                else
+                {
+                    var idProp = AccessTools.Property(type, "Id");
+                    if (idProp != null) id = (Guid)idProp.GetValue(deck);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"OnMoveSingleClicked: could not read deck Id: {ex.Message}");
+                return;
+            }
+            if (id == Guid.Empty) return;
+
+            MoveToFolderModal.Show(new List<Guid> { id });
+        }
+
+        private static void OnNewFolderClicked()
+        {
+            // Empty initial selection — just create a folder. The user can
+            // populate it later via Move-to-folder.
+            MoveToFolderModal.ShowCreateFolderModal();
         }
 
         // -----------------------------------------------------------------
@@ -547,6 +668,36 @@ namespace MTGAEnhancementSuite.Patches
                 pivot: new Vector2(0f, 0f), pos: new Vector2(-13f, 7f));
         }
 
+        // Reuses the folder sprite (or vector folder) and overlays a small
+        // "+" in the bottom-right corner so the New-Folder button is
+        // visually distinct from the Move-to-Folder button at a glance.
+        private static void PaintNewFolderIcon(GameObject clone)
+        {
+            PaintFolderIcon(clone);
+            var host = clone.transform.Find("MTGAES_Folder");
+            if (host == null) return;
+
+            // Small "+" badge in the bottom-right corner. We use a TMP
+            // glyph for crisp rendering at the small badge size; two
+            // crossed rects would look chunky.
+            var badge = new GameObject("MTGAES_PlusBadge");
+            badge.transform.SetParent(host, false);
+            var rt = badge.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(1f, 0f);
+            rt.anchorMax = new Vector2(1f, 0f);
+            rt.pivot     = new Vector2(1f, 0f);
+            rt.sizeDelta = new Vector2(18f, 18f);
+            rt.anchoredPosition = new Vector2(2f, -2f);
+
+            // Subtle dark backplate so the + reads against the folder body
+            // regardless of what icon tint we're using.
+            var bg = badge.AddComponent<Image>();
+            bg.color = new Color(0.08f, 0.10f, 0.16f, 0.95f);
+            bg.raycastTarget = false;
+
+            PaintGlyph(badge.transform, "+", new Color(0.95f, 0.95f, 1f, 1f), fontSize: 26);
+        }
+
         /// <summary>
         /// If a PNG asset exists at icons/&lt;name&gt;.png, paints it as an
         /// Image filling the parent and returns true. Otherwise returns false
@@ -634,6 +785,29 @@ namespace MTGAEnhancementSuite.Patches
             var img = go.AddComponent<Image>();
             img.color = color;
             img.raycastTarget = false;
+        }
+    }
+
+    /// <summary>
+    /// Mirrors how MTGA's own per-deck buttons (Edit, Delete, Clone, …)
+    /// react to selection changes: <c>UpdateSelectedDeckView</c> fires
+    /// every time the focused deck changes, with a null
+    /// <see cref="DeckViewInfo"/> meaning "nothing is selected". We hide
+    /// our single-deck Move button when nothing is focused so it never
+    /// appears to do nothing.
+    ///
+    /// Lives in its own patch class so the <see cref="HarmonyPatch"/>
+    /// attribute on <see cref="DeckManagerControllerPatch"/> stays anchored
+    /// to <c>Awake</c>.
+    /// </summary>
+    [HarmonyPatch(typeof(DeckManagerController), "UpdateSelectedDeckView")]
+    internal static class DeckManagerSelectionChangedPatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(Wizards.Mtga.Decks.DeckViewInfo deckViewInfo)
+        {
+            try { DeckManagerControllerPatch.OnSelectionFocusChanged(deckViewInfo != null); }
+            catch (Exception ex) { Plugin.Log.LogWarning($"OnSelectionFocusChanged: {ex.Message}"); }
         }
     }
 }

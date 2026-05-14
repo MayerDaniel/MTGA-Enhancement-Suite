@@ -106,7 +106,7 @@ namespace MTGAEnhancementSuite.UI
             // Row: + New Folder…
             MakeRow(content.transform, "+ New Folder…",
                 new Color(0.20f, 0.45f, 0.30f, 1f),
-                () => PromptForNameAndCreate(deckIds, () => UnityEngine.Object.Destroy(modal)));
+                () => ShowCreateFolderModal(deckIds, () => UnityEngine.Object.Destroy(modal)));
 
             // Row per existing folder
             foreach (var folder in DeckOrganizationManager.Folders)
@@ -168,9 +168,16 @@ namespace MTGAEnhancementSuite.UI
 
         // -----------------------------------------------------------------
         // + New Folder text-input flow
+        //
+        // Public so the deck-manager bottom strip can open a "create a new
+        // empty folder" prompt without having to first enter multi-select
+        // and pick the move action. Passing an empty / null
+        // <paramref name="deckIds"/> creates an empty folder; passing a
+        // non-empty list creates the folder and moves those decks in.
         // -----------------------------------------------------------------
-        private static void PromptForNameAndCreate(IReadOnlyList<Guid> deckIds, Action onDone)
+        internal static void ShowCreateFolderModal(IReadOnlyList<Guid> deckIds = null, Action onDone = null)
         {
+            if (deckIds == null) deckIds = Array.Empty<Guid>();
             var modal = new GameObject("MTGAES_NewFolderModal");
             UnityEngine.Object.DontDestroyOnLoad(modal);
             var canvas = modal.AddComponent<Canvas>();

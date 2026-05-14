@@ -61,7 +61,7 @@ namespace MTGAEnhancementSuite.Patches
                 FirebaseSseListener.Instance?.Dispose();
 
                 ChallengeFormatState.Reset();
-                ChallengeSettingsPatch._lobbyRegistered = false;
+                ChallengeSettingsPatch._registeredChallengeId = Guid.Empty;
             }
             catch (Exception ex)
             {
@@ -648,7 +648,7 @@ namespace MTGAEnhancementSuite.Patches
                         if (success)
                         {
                             ChallengeFormatState.IsLobbyPublic = true;
-                            _lobbyRegistered = true;
+                            _registeredChallengeId = challengeId;
                             FirebaseClient.Instance.StartHeartbeat(challengeIdStr);
                             StartHostSseListener();
                             Toast.Success("Lobby is now public!");
@@ -671,15 +671,25 @@ namespace MTGAEnhancementSuite.Patches
         }
 
         /// <summary>
-        /// Register the lobby in Firebase as private if not already registered.
-        /// Called from CopyLink/MakePublic to ensure the lobby exists for format pushes.
+        /// Tracks which challenge ID currently has a Firebase lobby record.
+        /// <see cref="Guid.Empty"/> means no lobby is currently registered.
+        ///
+        /// Keyed on the ID rather than a bool flag so we self-heal: if the
+        /// state ever drifts (e.g. <see cref="OnChallengeClosed"/> clears
+        /// <see cref="ChallengeFormatState.ActiveChallengeId"/> but a stale
+        /// "registered" flag carries over), the next call sees a mismatch
+        /// and re-registers. The old bool-flag version had the opposite
+        /// failure mode — after a post-match challenge recycle it would
+        /// short-circuit registration of the new lobby, leaving "Request
+        /// Invite" from the web link with no Firebase record to write to.
         /// </summary>
-        internal static bool _lobbyRegistered = false;
+        internal static Guid _registeredChallengeId = Guid.Empty;
 
         private static void RegisterLobbyIfNeeded(Guid challengeId)
         {
-            // Don't re-register if already registered (would overwrite public state)
-            if (_lobbyRegistered && ChallengeFormatState.ActiveChallengeId == challengeId)
+            // Don't re-register if already registered for THIS specific
+            // challenge ID. Re-registering would overwrite public state.
+            if (_registeredChallengeId == challengeId)
             {
                 PerPlayerLog.Info($"Lobby {challengeId} already registered, skipping re-registration");
                 return;
@@ -708,7 +718,7 @@ namespace MTGAEnhancementSuite.Patches
                     {
                         if (success)
                         {
-                            _lobbyRegistered = true;
+                            _registeredChallengeId = challengeId;
                             PerPlayerLog.Info($"Lobby {challengeId} registered (private) for format sync");
                             FirebaseClient.Instance.StartHeartbeat(challengeId.ToString());
                             StartHostSseListener();

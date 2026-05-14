@@ -351,6 +351,13 @@ namespace MTGAEnhancementSuite
                 }
                 Firebase.FirebaseSseListener.Instance?.Dispose();
                 ChallengeFormatState.ActiveChallengeId = Guid.Empty;
+                // The Firebase lobby record for the old challenge ID is gone now,
+                // so the "is this ID currently registered?" cache must be cleared
+                // too — otherwise the next RegisterLobbyIfNeeded for the recycled
+                // challenge could short-circuit and the new lobby would never
+                // appear in Firebase. (Symptom: web "Request Invite" 404s after
+                // any post-match challenge recycle.)
+                Patches.ChallengeSettingsPatch._registeredChallengeId = Guid.Empty;
                 return;
             }
 
@@ -363,6 +370,7 @@ namespace MTGAEnhancementSuite
 
             Firebase.FirebaseSseListener.Instance?.Dispose();
             ChallengeFormatState.Reset();
+            Patches.ChallengeSettingsPatch._registeredChallengeId = Guid.Empty;
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -449,6 +457,6 @@ namespace MTGAEnhancementSuite
     {
         public const string GUID = "com.mtgaenhancement.suite";
         public const string NAME = "MTGA Enhancement Suite";
-        public const string VERSION = "0.17.0";
+        public const string VERSION = "0.17.1";
     }
 }
