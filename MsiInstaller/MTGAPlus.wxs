@@ -68,13 +68,33 @@
       backslash (MSI directory properties need one), so we append it; the
       standalone Path value already ends in one. Conditions are mutually
       exclusive, so only one ever runs.
+
+      CRITICAL: these run in the UI sequence ONLY (Sequence="ui"), NOT "both".
+      They pre-fill INSTALLFOLDER as the *default* shown in the browse dialog.
+      If they also ran in the execute sequence, they would re-fire AFTER the
+      user browsed to a different folder and clobber that choice — the install
+      would ignore Browse and always land on the detected/default path. (That
+      was a real shipped bug: users whose MTGA wasn't at the default couldn't
+      redirect the install.) With ui-only, WixUI transfers the user's resolved
+      INSTALLFOLDER into the execute sequence and nothing overwrites it.
+
+      Trade-off: fully-silent installs (msiexec /qn, no UI sequence) don't get
+      autodetect — but those are power-user deployments that pass INSTALLFOLDER
+      explicitly anyway. Interactive double-click installs (the whole audience
+      for this MSI) work correctly.
     -->
     <SetProperty Action="SetMtgaDirSteam" Id="INSTALLFOLDER" Value="[MTGADIR_STEAM]\"
-                 After="AppSearch" Sequence="both" Condition="MTGADIR_STEAM" />
+                 After="AppSearch" Sequence="ui" Condition="MTGADIR_STEAM" />
     <SetProperty Action="SetMtgaDirStandalone" Id="INSTALLFOLDER" Value="[MTGADIR_STANDALONE]"
-                 After="AppSearch" Sequence="both" Condition="MTGADIR_STANDALONE AND NOT MTGADIR_STEAM" />
+                 After="AppSearch" Sequence="ui" Condition="MTGADIR_STANDALONE AND NOT MTGADIR_STEAM" />
 
-    <!-- Fallback default when neither key is found. -->
+    <!-- Fallback default when neither registry key is found (Epic installs,
+         or a machine missing the WotC key). ProgramFiles64Folder resolves to
+         C:\Program Files ONLY in a 64-bit package — so this MSI MUST be built
+         with `wix build -arch x64` (see tools/build_msi.ps1). In a 32-bit
+         (Intel) package ProgramFiles64Folder is undefined and this default
+         resolved to C:\Program Files (x86)\... — another real shipped bug.
+         Every MTGA machine is 64-bit Windows, so an x64 package is correct. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="WotcDir" Name="Wizards of the Coast">
         <Directory Id="INSTALLFOLDER" Name="MTGA" />

@@ -85,7 +85,11 @@ Write-Host "=== Building MSI ===" -ForegroundColor Cyan
 $wixVersion = $Version
 if (($wixVersion -split '\.').Count -lt 3) { $wixVersion = "$wixVersion.0" }
 
+# -arch x64 makes this a 64-bit package. Required so ProgramFiles64Folder (the
+# fallback install dir) resolves to C:\Program Files rather than being undefined
+# and landing under C:\Program Files (x86). Every MTGA machine is 64-bit Windows.
 wix build $wxs `
+    -arch x64 `
     -ext WixToolset.UI.wixext `
     -d StageDir="$stage" `
     -d Version="$wixVersion" `
