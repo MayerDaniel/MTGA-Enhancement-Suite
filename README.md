@@ -13,11 +13,11 @@ A [BepInEx 5](https://github.com/BepInEx/BepInEx) mod for **Magic: The Gathering
 
 ### Installer (Recommended)
 
-Download **[MTGAPlus-Installer.exe](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest/download/MTGAPlus-Installer.exe)** from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest) and run it. No dependencies needed.
+Download **[MTGAPlus-Installer.msi](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest/download/MTGAPlus-Installer.msi)** from the [latest release](https://github.com/MayerDaniel/MTGA-Enhancement-Suite/releases/latest) and run it. No dependencies needed.
 
 ### Command-Line Install
 
-Open **PowerShell**, **CMD**, or **Windows Terminal** and run:
+If Windows SmartScreen blocks the installer, open **PowerShell**, **CMD**, or **Windows Terminal** and run:
 
 ```
 powershell -c "irm https://raw.githubusercontent.com/MayerDaniel/MTGA-Enhancement-Suite/main/install.ps1 | iex"

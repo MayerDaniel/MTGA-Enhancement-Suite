@@ -1,9 +1,13 @@
 # Builds a complete release into the release/ directory:
 #   - Plugin DLL          (MTGAEnhancementSuite.dll)
 #   - Bootstrapper DLL    (already present, copied if newer)
-#   - Installer EXE       (MTGAPlus-Installer.exe — always in every release
-#                          so new users have a download path)
+#   - MSI installer       (MTGAPlus-Installer.msi — the one-click installer)
 #   - Signed manifest     (manifest.json, signed with signing_key.pem)
+#
+# NOTE: the old self-contained EXE installer (which just ran `irm install.ps1
+# | iex`) has been retired -- it tripped Defender for the same reason the MSI
+# was built to avoid, and its behavior is still available via the PowerShell
+# one-liner on the homepage. The MSI supersedes it.
 #
 # Usage:
 #   tools\build_release.ps1 0.15.0
@@ -36,13 +40,6 @@ Write-Host "=== Building bootstrapper DLL ==="
 dotnet build Bootstrapper\Bootstrapper.csproj -c Release
 if ($LASTEXITCODE -ne 0) { throw "Bootstrapper build failed" }
 Copy-Item Bootstrapper\bin\Release\MTGAESBootstrapper.dll $releaseDir\MTGAESBootstrapper.dll -Force
-Write-Host ""
-
-Write-Host "=== Publishing installer EXE ==="
-# self-contained single-file so users don't need .NET 6 installed
-dotnet publish Installer\MTGAESInstaller.csproj -c Release -o Installer\publish --self-contained true
-if ($LASTEXITCODE -ne 0) { throw "Installer publish failed" }
-Copy-Item Installer\publish\MTGAPlus-Installer.exe $releaseDir\MTGAPlus-Installer.exe -Force
 Write-Host ""
 
 Write-Host "=== Bundling icons ==="
@@ -81,8 +78,8 @@ Write-Host ""
 
 Write-Host "=== Signing manifest ==="
 # manifest covers DLLs + config only — the auto-updater swaps DLLs at runtime,
-# so the installer EXE is intentionally NOT in the manifest. It's just a GitHub
-# release asset for first-time-install downloads. Same applies to icons.zip.
+# so the installers (MSI) and icons.zip are intentionally NOT in the manifest.
+# They're just GitHub release assets for first-time installs.
 python sign_release.py $Version
 if ($LASTEXITCODE -ne 0) { throw "sign_release.py failed" }
 Write-Host ""
@@ -94,4 +91,4 @@ Write-Host ""
 Write-Host "Release v$Version is ready. Upload with:"
 Write-Host "  gh release create v$Version release\* --title `"v$Version - <title>`" --notes `"<notes>`""
 Write-Host "or, if the release already exists:"
-Write-Host "  gh release upload v$Version release\MTGAPlus-Installer.exe"
+Write-Host "  gh release upload v$Version release\MTGAPlus-Installer.msi"
