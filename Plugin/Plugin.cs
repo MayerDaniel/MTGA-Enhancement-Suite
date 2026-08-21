@@ -79,6 +79,7 @@ namespace MTGAEnhancementSuite
                 Patches.BestOfPatch.Apply(_harmony);
                 Patches.CompanionDisablePatch.Apply(_harmony);
                 Patches.CardVFXPatch.Apply(_harmony);
+                Patches.ForceSimplifiedPatch.Apply(_harmony);
                 Log.LogInfo("Manual Harmony patches applied");
             }
             catch (Exception ex)
@@ -145,6 +146,12 @@ namespace MTGAEnhancementSuite
                 if (Input.GetKeyDown(KeyCode.F7))
                     Features.AnimationFastForward.Toggle();
                 Features.AnimationFastForward.Tick();
+
+                // Turn timer above/below the timeout hourglass.
+                Features.TurnTimerDisplay.Tick();
+
+                // Preset button to the right of the deck editor filter bar.
+                Features.DeckPresetButton.Tick();
             }
             catch (Exception ex)
             {
@@ -440,6 +447,7 @@ namespace MTGAEnhancementSuite
         private void OnDestroy()
         {
             Plugin.Log.LogInfo("PluginBehaviour.OnDestroy called (should NOT happen)");
+            try { Features.TurnTimerDisplay.Clear(); } catch { }
             SceneManager.sceneLoaded -= OnSceneLoaded;
             TcpIpcServer.Stop();
             // Last-ditch failsafe: if the plugin is torn down mid-fast-

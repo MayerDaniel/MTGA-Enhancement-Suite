@@ -462,7 +462,7 @@ namespace MTGAEnhancementSuite.UI
             CreateToggle(_settingsContent.transform, "CompanionToggle",
                 "Disable Companions",
                 "Hides all pets/companions during matches — no rendering, animations, or sounds.",
-                new Vector2(0.05f, 0.72f), new Vector2(0.95f, 0.85f),
+                new Vector2(0.05f, 0.745f), new Vector2(0.95f, 0.850f),
                 ModSettings.Instance.DisableCompanions,
                 (val) =>
                 {
@@ -475,7 +475,7 @@ namespace MTGAEnhancementSuite.UI
             CreateToggle(_settingsContent.transform, "CardVFXToggle",
                 "Disable Card Animations",
                 "Removes flashy ETB effects, 3D model popups, and cosmetic card animations. Basic arrival sounds are kept.",
-                new Vector2(0.05f, 0.56f), new Vector2(0.95f, 0.69f),
+                new Vector2(0.05f, 0.615f), new Vector2(0.95f, 0.720f),
                 ModSettings.Instance.DisableCardVFX,
                 (val) =>
                 {
@@ -484,13 +484,39 @@ namespace MTGAEnhancementSuite.UI
                     Toast.Info(val ? "Card animations disabled" : "Card animations enabled");
                 });
 
+            // Force simplified card view toggle
+            CreateToggle(_settingsContent.transform, "ForceSimplifiedToggle",
+                "Force Simplified Cards",
+                "Always show cards without special styling (showcase, borderless, alt-art). Artwork is kept. Applies in matches and in the examine view.",
+                new Vector2(0.05f, 0.485f), new Vector2(0.95f, 0.590f),
+                ModSettings.Instance.ForceSimplifiedCards,
+                (val) =>
+                {
+                    ModSettings.Instance.ForceSimplifiedCards = val;
+                    ModSettings.Instance.Save();
+                    Toast.Info(val ? "Simplified cards on" : "Simplified cards off");
+                });
+
+            // Turn timer toggle
+            CreateToggle(_settingsContent.transform, "TurnTimerToggle",
+                "Show Turn Timer",
+                "Displays the remaining turn time above your timeout hourglass and below the opponent's. Dimmed while the timer is paused.",
+                new Vector2(0.05f, 0.355f), new Vector2(0.95f, 0.460f),
+                ModSettings.Instance.ShowTurnTimer,
+                (val) =>
+                {
+                    ModSettings.Instance.ShowTurnTimer = val;
+                    ModSettings.Instance.Save();
+                    Toast.Info(val ? "Turn timer shown" : "Turn timer hidden");
+                });
+
             // Export collection — opens a Windows save dialog and writes the
             // owned cards in MTGA deck-list format. Useful for backing up
             // the collection or pasting into deckbuilders.
             CreateActionRow(_settingsContent.transform, "ExportCollectionRow",
                 "Export Collection",
                 "Save your owned cards to a text file (MTGA deck format) — for sharing with deckbuilders or backing up your collection.",
-                new Vector2(0.05f, 0.40f), new Vector2(0.95f, 0.53f),
+                new Vector2(0.05f, 0.225f), new Vector2(0.95f, 0.330f),
                 "Export…",
                 () =>
                 {
