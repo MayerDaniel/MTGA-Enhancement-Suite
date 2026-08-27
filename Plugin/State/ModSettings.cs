@@ -21,6 +21,24 @@ namespace MTGAEnhancementSuite.State
         public bool DisableCardVFX { get; set; } = false;
 
         /// <summary>
+        /// Always render cards without their special styling (showcase,
+        /// borderless, alt-art) while keeping the original artwork. Applies
+        /// both to cards in a match and to the examine view.
+        /// See Patches/ForceSimplifiedPatch.cs.
+        /// </summary>
+        [JsonProperty("forceSimplifiedCards")]
+        public bool ForceSimplifiedCards { get; set; } = false;
+
+        /// <summary>
+        /// Shows the turn countdown above the local player's timeout
+        /// hourglass, and below the opponent's. On by default: it only
+        /// surfaces information the client already has, and changes no
+        /// game behaviour. See Features/TurnTimerDisplay.cs.
+        /// </summary>
+        [JsonProperty("showTurnTimer")]
+        public bool ShowTurnTimer { get; set; } = true;
+
+        /// <summary>
         /// LEGACY: pre-v0.19 user-defined deck folders + root-order, stored as
         /// a single shared blob. Kept for backwards compat — on first access
         /// for an account, <see cref="Features.DeckOrganizationManager"/>
@@ -42,6 +60,16 @@ namespace MTGAEnhancementSuite.State
         [JsonProperty("deckOrganizationByAccount")]
         public Dictionary<string, DeckOrganization> DeckOrganizationByAccount { get; set; }
             = new Dictionary<string, DeckOrganization>();
+
+        /// <summary>
+        /// Reusable card presets, inserted in bulk into a deck open in the
+        /// deck editor. Unlike folders these are NOT keyed by account: a
+        /// preset is just a list of grpIds, so it carries across accounts.
+        /// The deck builder still rejects unowned cards exactly as it would
+        /// for a manual insert.
+        /// </summary>
+        [JsonProperty("cardPresets")]
+        public List<CardPreset> CardPresets { get; set; } = new List<CardPreset>();
 
         public static ModSettings Instance
         {
