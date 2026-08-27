@@ -1,1 +1,1 @@
-This repo is now legacy, the current version is maintained at https://github.com/Beligal/MTGA-Enhancement-Suite
+This repo is now legacy, I am no longer associated with the MTGA Enhancement Suite. A community member has forked the project here and has expressed interest in maintaining it, you can see more details here: https://github.com/Beligal/MTGA-Enhancement-Suite
